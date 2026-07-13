@@ -1,3 +1,4 @@
+
 <!-- HORN STUDIO — published-science horn geometry: JMLC/SWH/tractrix/hypex/conical/CD(Keele)/OS-SE/R-OSSE, PETF presets, Webster loading indicator, STL/OBJ/CSV/cloud exports -->
 <!--
   Copyright (c) 2026 Silence Please (New York).
@@ -2845,14 +2846,14 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       '<div class="eyebrow">SILENCE PLEASE \u2014 ACOUSTIC INSTRUMENTS</div><div style="font-size:8px;letter-spacing:.06em;color:var(--faint);margin-top:2px">\u00a9 2026 \u00b7 CC BY-NC 4.0 \u2014 free for non-commercial use</div>' +
       '<h1>HORN STUDIO</h1>' +
       '<div class="eyebrow" style="margin-top:4px">MULTI-FAMILY HORN CONSTRUCTION \u00b7 PETF \u00b7 WEBSTER LOADING</div></div>' +
-      '<div class="tb"><div><div class="k">FAMILIES</div><div class="v">9</div></div>' +
+      '<div class="tb"><div><div class="k">FAMILIES</div><div class="v" id="tbFamCount">\u2014</div></div>' +
       '<div><div class="k">METHOD</div><div class="v" id="tbFam">JMLC</div></div>' +
       '<div><div class="k">LOADING</div><div class="v">WEBSTER</div></div>' +
       '<div><div class="k">UNITS</div><div class="v">mm / Hz</div></div></div></header>' +
       '<div class="cols"><aside>' + side + '</aside>' +
       '<main>' +
       '<div style="padding:12px 16px;border-bottom:1px solid var(--line)"><div class="eyebrow" style="margin-bottom:6px">3-D PREVIEW \u2014 DRAG ROTATE \u00b7 WHEEL ZOOM <button class="btn" id="showConstr" style="display:none;width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">SHOW CONSTRUCTION</button></div>' +
-      '<div id="view3d" style="width:100%;max-width:560px;height:300px;border:1px solid var(--line);background:#FFFFFF;touch-action:none;cursor:grab"></div>' +
+      '<div id="view3d" style="width:100%;height:380px;background:#FFFFFF;touch-action:none;cursor:grab"></div>' +
       '<div id="v3dnote" style="font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:6px;letter-spacing:.04em"></div></div>' +
       '<div id="drawing" style="padding:10px 12px 0"></div>' +
       '<div class="legend" id="legend"></div><div class="stats" id="stats"></div>' +
@@ -3273,6 +3274,8 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     if (S.family === "os") st += statHTML("OS f\u2091 (0.2R\u2090)", (0.2 * 344000 * Math.sin(Math.min(70, Math.max(15, S.covH / 2)) * Math.PI / 180) / (Math.PI * S.throatD / 2)).toFixed(0) + " Hz");
 
     document.getElementById("stats").innerHTML = st;
+    var _fcnt = document.getElementById("tbFamCount"); if (_fcnt) _fcnt.textContent = String(Object.keys(FAMILY_MATH).length + 1); // 11 families (swh covers ewf via aspect; +wn... count from the family select)
+    var _fsel9 = document.getElementById("familySel"); if (_fcnt && _fsel9 && _fsel9.options && _fsel9.options.length) _fcnt.textContent = String(_fsel9.options.length);
     var _eqs = document.getElementById("eqs"); if (_eqs) _eqs.innerHTML = methodBlurb() +
       (FAMILY_MATH[S.family] ? '<div class="eyebrow" style="margin-top:12px">MATHEMATICS</div><div style="font-size:13px;overflow-x:auto">' + FAMILY_MATH[S.family] + '</div>' : '');
     update3D(lastAct);
@@ -3289,11 +3292,17 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       return;
     }
     try {
-      var w = box.clientWidth || 520, h = 300;
+      var w = box.clientWidth || 900, h = 380;
       V3.renderer = new THREE.WebGLRenderer({ antialias: true });
       V3.renderer.setPixelRatio(Math.min(1.5, window.devicePixelRatio || 1));
       V3.renderer.setSize(w, h);
       box.appendChild(V3.renderer.domElement);
+      window.addEventListener("resize", function () {
+        if (!V3.renderer || !box.clientWidth) return;
+        V3.renderer.setSize(box.clientWidth, 380);
+        V3.camera.aspect = box.clientWidth / 380;
+        V3.camera.updateProjectionMatrix();
+      });
       V3.scene = new THREE.Scene();
       V3.scene.background = new THREE.Color(0xFFFFFF);
       V3.camera = new THREE.PerspectiveCamera(40, w / h, 1, 100000);
