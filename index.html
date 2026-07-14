@@ -1890,6 +1890,172 @@ function sectionArea(shape, a, b, rho) {
 // transition length; half-widths blend W/2, H/2 into the family walls the same
 // way. Applied to the prof, so EVERYTHING downstream -- drawings, 3-D, STL, the
 // BEM/Akabak source cap -- carries the true rectangular throat geometry.
+// DRIVER MOUNTING PLATE (entry 104, Marwan). A flat annular flange at the
+// throat (z from -T to a 0.6 mm overlap into the horn wall so slicers union
+// cleanly), with N REAL circular bolt through-holes. Watertight construction:
+// polar grid over the annulus with a 4x4-cell block cut at each bolt center
+// (16-vertex boundary) stitched to a 16-gon hole circle (one quad ring), hole
+// bores as 16-gon cylinders. Defaults per throat size (VERIFY against the
+// driver datasheet): 1in bolt-on = 3x M6 on 76.2 BC; 1.4/1.5/2in = 4x M6/M8
+// on 101.6 BC (DCX464-class); clearance hole 6.5 mm (M6) / 8.5 (M8).
+function driverPlateDefaults(throatD) {
+  if (throatD < 32) return { boltN: 3, bcD: 76.2, holeD: 6.5, outerD: 95 };
+  return { boltN: 4, bcD: 101.6, holeD: 6.5, outerD: 128 };
+}
+function buildDriverPlate(rt, outerR, T, boltN, bcR, holeR, z0, boreTopR, boreProf) {
+  z0 = z0 || 0;
+  var zTop = z0, zBot = z0 - T;   // entry 110: the plate spans [z0-T, z0] exactly -- flush faces, no overhang
+  boreTopR = Math.max(rt, boreTopR || rt);
+  // entry 108 (Marwan: "we need to follow the inside horn curve and have that
+  // cut through the plate"): boreProf = [{z, r}] stations zBot -> zTop; the
+  // bore wall SWEEPS the horn's own inner curve through the plate (below the
+  // throat it is the straight driver bore). Fallback: the old 2-station cone.
+  if (!boreProf) boreProf = [{ z: zBot, r: rt }, { z: zTop, r: boreTopR }];
+  boreTopR = boreProf[boreProf.length - 1].r;
+  var cell = Math.max(0.6, holeR * 0.7);
+  var perSec = Math.max(8, 4 * Math.ceil(2 * Math.PI * bcR / (boltN * cell * 4)));
+  perSec = Math.ceil(perSec / 2) * 2;
+  var nP = boltN * perSec;
+  var nR = Math.max(6, Math.ceil((outerR - rt) / cell));
+  if (nR % 2 === 1) nR++;
+  // entry 110b: INDEPENDENT row arrays per face (the bore's two ends differ when
+  // it follows the horn expansion) -- each sheared to pin the bolt circle at the
+  // SAME index so the hole blocks align vertically.
+  function makeRows(rIn) {
+    var rw = [], i2;
+    for (i2 = 0; i2 <= nR; i2++) rw.push(rIn + (outerR - rIn) * i2 / nR);
+    return rw;
+  }
+  var rowsB = makeRows(boreProf[0].r), rowsT = makeRows(boreTopR), i;
+  var iBC = 2, best = 1e9;
+  for (i = 2; i <= nR - 2; i++) if (Math.abs(rowsB[i] - bcR) < best) { best = Math.abs(rowsB[i] - bcR); iBC = i; }
+  [rowsB, rowsT].forEach(function (rw) {
+    var shift = bcR - rw[iBC];
+    for (var i3 = 0; i3 <= nR; i3++) rw[i3] += shift * (1 - Math.abs(i3 - iBC) / Math.max(iBC, nR - iBC));
+  });
+  rowsB[0] = boreProf[0].r; rowsT[0] = boreTopR; rowsB[nR] = outerR; rowsT[nR] = outerR;
+  var jBC = [], b;
+  for (b = 0; b < boltN; b++) jBC.push(b * perSec + (perSec >> 1));
+  function inBlock(i2, j2) {
+    if (i2 < iBC - 2 || i2 >= iBC + 2) return false;
+    for (var b2 = 0; b2 < boltN; b2++) {
+      var dj = ((j2 - jBC[b2]) % nP + nP) % nP;
+      if (dj >= nP - 2 || dj < 2) return true;
+    }
+    return false;
+  }
+  var pos = [], idx = [];
+  function V(x, y, z) { pos.push(x, y, z); return pos.length / 3 - 1; }
+  function quad(a, b3, c, d) { idx.push(a, b3, c, a, c, d); }
+  function ringXY(i2, j2, top) {
+    var ph = 2 * Math.PI * j2 / nP;
+    var rr = (top ? rowsT : rowsB)[i2];   // entry 110b: per-face rows
+    return [top ? zTop : zBot, rr * Math.cos(ph), rr * Math.sin(ph)];
+  }
+  // ---- entry 107: REGION-SPLIT vertices (crisp machined edges). Each face
+  // group owns its vertices; seams are duplicated at identical positions and
+  // weld closed in validateMesh / any slicer. ----
+  // TOP + BOTTOM faces (own grids)
+  var gT = [], gB = [], j;
+  for (i = 0; i <= nR; i++) { gT.push([]); gB.push([]);
+    for (j = 0; j < nP; j++) { var pT = ringXY(i, j, true), pB = ringXY(i, j, false); gT[i].push(V(pT[0], pT[1], pT[2])); gB[i].push(V(pB[0], pB[1], pB[2])); } }
+  for (i = 0; i < nR; i++) for (j = 0; j < nP; j++) {
+    if (inBlock(i, j)) continue;
+    var j3 = (j + 1) % nP;
+    quad(gT[i][j], gT[i + 1][j], gT[i + 1][j3], gT[i][j3]);
+    quad(gB[i][j], gB[i][j3], gB[i + 1][j3], gB[i + 1][j]);
+  }
+  // OUTER rim wall (own ring copies)
+  var oT = [], oB = [];
+  for (j = 0; j < nP; j++) { var q1 = ringXY(nR, j, true), q2 = ringXY(nR, j, false); oT.push(V(q1[0], q1[1], q1[2])); oB.push(V(q2[0], q2[1], q2[2])); }
+  for (j = 0; j < nP; j++) { var j4 = (j + 1) % nP; quad(oT[j4], oT[j], oB[j], oB[j4]); }
+  // INNER bore wall (own ring copies, cone on top)
+  var bore = [];
+  for (var iS = 0; iS < boreProf.length; iS++) {
+    var ring9 = [];
+    for (j = 0; j < nP; j++) { var ph9 = 2 * Math.PI * j / nP; ring9.push(V(boreProf[iS].z, boreProf[iS].r * Math.cos(ph9), boreProf[iS].r * Math.sin(ph9))); }
+    bore.push(ring9);
+  }
+  for (var iS2 = 0; iS2 < bore.length - 1; iS2++)
+    for (j = 0; j < nP; j++) { var j5 = (j + 1) % nP; quad(bore[iS2 + 1][j], bore[iS2 + 1][j5], bore[iS2][j5], bore[iS2][j]); }
+  // BOLT HOLES: per hole -- top ring quads, bottom ring quads (face-owned rims),
+  // and an OWN bore wall ring (crisp hole edge)
+  for (b = 0; b < boltN; b++) {
+    var jc = jBC[b], phC = 2 * Math.PI * jc / nP;
+    var cx = bcR * Math.cos(phC), cy = bcR * Math.sin(phC);
+    var loop = [], k;
+    for (k = -2; k < 2; k++) loop.push([iBC - 2, jc + k]);
+    for (k = -2; k < 2; k++) loop.push([iBC + k, jc + 2]);
+    for (k = 2; k > -2; k--) loop.push([iBC + 2, jc + k]);
+    for (k = 2; k > -2; k--) loop.push([iBC + k, jc - 2]);
+    var lT = loop.map(function (q) { return gT[q[0]][((q[1] % nP) + nP) % nP]; });
+    var lB = loop.map(function (q) { return gB[q[0]][((q[1] % nP) + nP) % nP]; });
+    // entry 107b (final): the hole circle is sampled at angles INTERPOLATED
+    // between consecutive boundary-vertex angles (3 per edge -> 48-gon, chords
+    // <= ~13 deg = visually round), and each boundary vertex FANS to its circle
+    // span -- monotone by construction: cannot cross, no T-junctions, and the
+    // 48-gon bore keeps the crisp wall-owned edge.
+    var angsB = lT.map(function (vv) { return Math.atan2(pos[vv * 3 + 2] - cy, pos[vv * 3 + 1] - cx); });
+    for (var q9 = 1; q9 < 16; q9++) { while (angsB[q9] > angsB[q9 - 1]) angsB[q9] -= 2 * Math.PI; }
+    var angC = [];
+    for (k = 0; k < 16; k++) {
+      var aA = angsB[k], aB = (k < 15 ? angsB[k + 1] : angsB[0] - 2 * Math.PI);
+      for (var mS = 0; mS < 3; mS++) angC.push(aA + (aB - aA) * mS / 3);
+    }
+    var hTf = [], hBf = [], hTw = [], hBw = [];
+    for (k = 0; k < 48; k++) {
+      var hx = cx + holeR * Math.cos(angC[k]), hy = cy + holeR * Math.sin(angC[k]);
+      hTf.push(V(zTop, hx, hy)); hBf.push(V(zBot, hx, hy));
+      hTw.push(V(zTop, hx, hy)); hBw.push(V(zBot, hx, hy));
+    }
+    for (k = 0; k < 16; k++) {
+      var kN = (k + 1) % 16, c0 = 3 * k;
+      for (var fS = 0; fS < 3; fS++) {
+        var cA = hTf[(c0 + fS) % 48], cB = hTf[(c0 + fS + 1) % 48];
+        idx.push(lT[k], cA, cB);
+        var dA = hBf[(c0 + fS) % 48], dB = hBf[(c0 + fS + 1) % 48];
+        idx.push(lB[k], dB, dA);
+      }
+      idx.push(lT[k], hTf[(c0 + 3) % 48], lT[kN]);
+      idx.push(lB[k], lB[kN], hBf[(c0 + 3) % 48]);
+    }
+    for (k = 0; k < 48; k++) {
+      var k2 = (k + 1) % 48;
+      quad(hTw[k], hTw[k2], hBw[k2], hBw[k]);
+    }
+  }
+  return { pos: new Float32Array(pos), idx: new Uint32Array(idx) };
+}
+// STRAIGHT DRIVER ENTRY (entry 104, Marwan: "some throats are curved which is
+// not great for compression drivers"). Replaces the first exLen mm of a wall
+// with a STRAIGHT segment at the driver's exit half-angle from exactly rt,
+// then a C1 Hermite blend over the next exLen into the family wall. The law
+// is locally overridden (standard practice -- the driver's own exit defines
+// this region); everything past 2*exLen is untouched.
+function straightEntry(wall, rt, exDeg, exLen) {
+  if (!(exLen > 0) || !wall || wall.length < 8) return wall;
+  var tanA = Math.tan(exDeg * Math.PI / 180);
+  var zB = 2 * exLen, out = [], i;
+  // family wall state at the blend end
+  var iB = 0;
+  while (iB < wall.length - 2 && wall[iB].z < zB) iB++;
+  var rB = wall[iB].r;
+  var dzB = wall[Math.min(wall.length - 1, iB + 3)].z - wall[Math.max(0, iB - 3)].z;
+  var sB = dzB > 1e-9 ? (wall[Math.min(wall.length - 1, iB + 3)].r - wall[Math.max(0, iB - 3)].r) / dzB : 0;
+  var r1 = rt + tanA * exLen;                      // straight segment end
+  for (i = 0; i < wall.length; i++) {
+    var z = wall[i].z;
+    if (z <= exLen) out.push({ z: z, r: rt + tanA * z });
+    else if (z < zB) {
+      var t = (z - exLen) / exLen, h = t * t * (3 - 2 * t);
+      // Hermite: value + slope continuity at both ends
+      var t2 = t * t, t3 = t2 * t;
+      var h00 = 2 * t3 - 3 * t2 + 1, h10 = t3 - 2 * t2 + t, h01 = -2 * t3 + 3 * t2, h11 = t3 - t2;
+      out.push({ z: z, r: h00 * r1 + h10 * exLen * tanA + h01 * rB + h11 * exLen * sB });
+    } else out.push(wall[i]);
+  }
+  return out;
+}
 function throatRibbonMorph(prof, Wmm, Hmm, Lmm) {
   if (!(Wmm > 0 && Hmm > 0) || !prof || !prof.H || !prof.V) return prof;
   var Hp = prof.H, Vp = prof.V, B = prof.baseStations || Hp.length;
@@ -2010,9 +2176,9 @@ function buildRings(prof, segs) {
   }
   return inner;
 }
-function buildSolidMesh(prof, t, segs, ringsOv) {
+function buildSolidMesh(prof, t, segs, ringsOv, lipStyle) {
   var H = prof.H, V = prof.V, M = ringsOv ? ringsOv.M : H.length, i, j;
-  var RO = 8; // roundover arc steps
+  var RO = (lipStyle === 'straight') ? 1 : 28; // entry 111: straight = flat end face; rounded = 28 steps (smoother than 20)
   var inner = ringsOv ? ringsOv.rings : buildRings(prof, segs);
   // per-vertex outward normals -> outer shell
   var outer = new Float32Array(M * segs * 3);
@@ -2036,19 +2202,31 @@ function buildSolidMesh(prof, t, segs, ringsOv) {
   var pos = new Float32Array((2 * M * segs + nRound) * 3);
   pos.set(inner, 0);
   var roBase = M * segs;
-  // roundover: semicircular bridge from inner rim to outer rim, bulging along end tangent
+  // entry 105 (Marwan: "why does the lip have an edge and is not smooth"): the
+  // old bullnose was a perfect semicircle keyed to the INNER rim tangent -- but
+  // the outer shell is a DISCRETE normal-offset, so over the sharply curving
+  // roundover its rim chord tilts by ~t/R (17 deg at t6/R20) from that
+  // direction and the semicircle landed on it with a real crease. The bullnose
+  // is now a cubic Hermite that matches the MEASURED chord tangent at EACH rim
+  // (C1 at both junctions by construction), bulging half a wall along the
+  // averaged normal like the semicircle did.
   for (j = 0; j < segs; j++) {
     var ke = ((M - 1) * segs + j) * 3, kp = ((M - 2) * segs + j) * 3;
+    var koE = ((M - 1) * segs + j) * 3, koP = ((M - 2) * segs + j) * 3;
     var dx = pos[ke] - pos[kp], dy = pos[ke + 1] - pos[kp + 1], dz2 = pos[ke + 2] - pos[kp + 2];
     var dl = Math.hypot(dx, dy, dz2) || 1e-12; dx /= dl; dy /= dl; dz2 /= dl;
-    var nx2 = nrm[ke], ny2 = nrm[ke + 1], nz3 = nrm[ke + 2];
-    var mx = pos[ke] + t / 2 * nx2, my = pos[ke + 1] + t / 2 * ny2, mz = pos[ke + 2] + t / 2 * nz3;
+    var ox = outer[koE] - outer[koP], oy = outer[koE + 1] - outer[koP + 1], oz = outer[koE + 2] - outer[koP + 2];
+    var ol = Math.hypot(ox, oy, oz) || 1e-12; ox /= ol; oy /= ol; oz /= ol;
+    var P0x = pos[ke], P0y = pos[ke + 1], P0z = pos[ke + 2];
+    var P1x = outer[koE], P1y = outer[koE + 1], P1z = outer[koE + 2];
+    var mag = Math.PI * t / 2;                      // semicircle-equivalent tangent magnitude
     for (var a2 = 1; a2 < RO; a2++) {
-      var al = Math.PI * a2 / RO;
+      var u9 = a2 / RO, u2 = u9 * u9, u3 = u2 * u9;
+      var h00 = 2 * u3 - 3 * u2 + 1, h10 = u3 - 2 * u2 + u9, h01 = -2 * u3 + 3 * u2, h11 = u3 - u2;
       var kk = (roBase + (a2 - 1) * segs + j) * 3;
-      pos[kk] = mx - t / 2 * Math.cos(al) * nx2 + t / 2 * Math.sin(al) * dx;
-      pos[kk + 1] = my - t / 2 * Math.cos(al) * ny2 + t / 2 * Math.sin(al) * dy;
-      pos[kk + 2] = mz - t / 2 * Math.cos(al) * nz3 + t / 2 * Math.sin(al) * dz2;
+      pos[kk]     = h00 * P0x + h10 * mag * dx + h01 * P1x + h11 * (-mag * ox);
+      pos[kk + 1] = h00 * P0y + h10 * mag * dy + h01 * P1y + h11 * (-mag * oy);
+      pos[kk + 2] = h00 * P0z + h10 * mag * dz2 + h01 * P1z + h11 * (-mag * oz);
     }
   }
   var outBase = M * segs + nRound;
@@ -2062,15 +2240,34 @@ function buildSolidMesh(prof, t, segs, ringsOv) {
       quad(outBase + i * segs + j, outBase + i * segs + j2, outBase + (i + 1) * segs + j2, outBase + (i + 1) * segs + j); // outer
     }
   // chain: inner rim -> roundover rings -> outer rim
-  var chain = [];
-  chain.push(function (j5) { return (M - 1) * segs + j5; });
-  for (var a3 = 1; a3 < RO; a3++) (function (a4) { chain.push(function (j5) { return roBase + (a4 - 1) * segs + j5; }); })(a3);
-  chain.push(function (j5) { return outBase + (M - 1) * segs + j5; });
-  for (var cc = 0; cc < chain.length - 1; cc++)
+  if (lipStyle === 'straight') {
+    // entry 111 (Marwan: "the horn lip is rounded not straight it needs to be
+    // straight"): a machined square-cut mouth -- flat annular end face with
+    // OWN (split) vertices so both edges render crisp; welds closed.
+    var pos2 = new Float32Array(pos.length + segs * 6);
+    pos2.set(pos, 0);
+    var eI = pos.length / 3, eO = eI + segs;
+    for (j = 0; j < segs; j++) {
+      var kI = ((M - 1) * segs + j) * 3, kO = ((outBase + (M - 1) * segs + j)) * 3;
+      pos2[(eI + j) * 3] = pos[kI]; pos2[(eI + j) * 3 + 1] = pos[kI + 1]; pos2[(eI + j) * 3 + 2] = pos[kI + 2];
+      pos2[(eO + j) * 3] = pos[kO]; pos2[(eO + j) * 3 + 1] = pos[kO + 1]; pos2[(eO + j) * 3 + 2] = pos[kO + 2];
+    }
+    pos = pos2;
     for (j = 0; j < segs; j++) {
       var j3 = (j + 1) % segs;
-      quad(chain[cc](j), chain[cc](j3), chain[cc + 1](j3), chain[cc + 1](j));
+      quad(eI + j, eI + j3, eO + j3, eO + j);
     }
+  } else {
+    var chain = [];
+    chain.push(function (j5) { return (M - 1) * segs + j5; });
+    for (var a3 = 1; a3 < RO; a3++) (function (a4) { chain.push(function (j5) { return roBase + (a4 - 1) * segs + j5; }); })(a3);
+    chain.push(function (j5) { return outBase + (M - 1) * segs + j5; });
+    for (var cc = 0; cc < chain.length - 1; cc++)
+      for (j = 0; j < segs; j++) {
+        var j3 = (j + 1) % segs;
+        quad(chain[cc](j), chain[cc](j3), chain[cc + 1](j3), chain[cc + 1](j));
+      }
+  }
   for (j = 0; j < segs; j++) { var j4 = (j + 1) % segs; quad(j, j4, outBase + j4, outBase + j); } // throat annulus
   return { pos: pos, idx: new Uint32Array(idx) };
 }
@@ -2081,9 +2278,18 @@ function validateMesh(mesh, repair) {
   // non-manifold edges. With repair=true, zero-area triangles are dropped from idx.
   var pos = mesh.pos, idx = mesh.idx, nonFinite = 0, degen = 0, keep = [];
   for (var q = 0; q < pos.length; q++) if (!isFinite(pos[q])) nonFinite++;
+  // entry 107: WELD coincident vertices (1e-4) before edge accounting -- crisp-
+  // shaded solids duplicate seam vertices at identical positions (sharp feature
+  // edges); closed-after-weld IS printable-closed (slicers weld by position).
+  var weld = {}, remap = new Uint32Array(pos.length / 3);
+  for (var w9 = 0; w9 < pos.length / 3; w9++) {
+    var kw = Math.round(pos[w9 * 3] * 1e4) + "_" + Math.round(pos[w9 * 3 + 1] * 1e4) + "_" + Math.round(pos[w9 * 3 + 2] * 1e4);
+    if (weld[kw] === undefined) weld[kw] = w9;
+    remap[w9] = weld[kw];
+  }
   var edges = {};
   for (var t = 0; t < idx.length; t += 3) {
-    var a = idx[t], b = idx[t + 1], c = idx[t + 2];
+    var a = remap[idx[t]], b = remap[idx[t + 1]], c = remap[idx[t + 2]];
     var ux = pos[b*3]-pos[a*3], uy = pos[b*3+1]-pos[a*3+1], uz = pos[b*3+2]-pos[a*3+2];
     var vx = pos[c*3]-pos[a*3], vy = pos[c*3+1]-pos[a*3+1], vz = pos[c*3+2]-pos[a*3+2];
     var cx = uy*vz-uz*vy, cy = uz*vx-ux*vz, cz = ux*vy-uy*vx;
@@ -3291,7 +3497,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
 
   /* ================= state ================= */
   var S = {
-    family: "jmlc", fc: 400, throatD: 35.56, entryDeg: 0, T0: 0.7, trunc: 175, aplat: 4, ellMu: 0.88, ellSigma: 0.53, decoupeN: 0.3, decoupeP: 11, throatShape: "round", ribW: 0, ribH: 0, ribL: 0,
+    family: "jmlc", fc: 400, throatD: 35.56, entryDeg: 0, T0: 0.7, trunc: 175, aplat: 4, ellMu: 0.88, ellSigma: 0.53, decoupeN: 0.3, decoupeP: 11, throatShape: "round", lipStyle: "round", ribW: 0, ribH: 0, ribL: 0, exitLen: 0, exitDeg: 10, plateT: 0, plateD: 0, boltN: 0, boltCircleD: 0, boltHoleD: 0, boltRot: 0,
     petf: false, petfPreset: "off", petfShape: "exp", petfRef: "throat", Tadd: 3.5, fmult: 3, sOff: 0,
     fins: "off", shell: "uniform", finT: 10, adaptL: 25, wnUL: 0.5, wnUC: 0.68, showConstr: false, wnFins: 0, wnFinT: 1.0, wnClear: 0.4, wnFinU1: 0.7,
     aspect: 1.0, section: "ellipse", cornerR: 60, covH: 90, covV: 40, f0: 800, osK: 1.0, osS: 0.7, osN: 4, seN: 2.5, spProj: "flat", f0V: 0, TaddV: 0.4, fmultV: 2, rosR: 130, rosA: 39, rosA0: 7.5, rosK: 1.8, rosRr: 0.3, rosB: 0.3, rosM: 0.8, rosQ: 3.7, flareR: 20, flareWrap: 0, thick: 5
@@ -3351,6 +3557,12 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       var effW9 = 0, effH9 = 0;
       if (S.throatShape === "rect") { effW9 = S.ribW; effH9 = S.ribH; }
       p9 = throatRibbonMorph(p9, effW9, effH9, S.ribL || 0);
+    // entry 104 (Marwan: curved throats are not great for compression drivers):
+    // straight driver-exit entry, prof-path law families only (cd designs its
+    // own entry; rings families keep their specialized throats).
+    if (S.exitLen > 0 && p9 && p9.H && !p9.azProfiles && S.family !== "cd" && S.family !== "wn" && S.family !== "biradial" && S.family !== "iwata") {
+      p9 = Object.assign({}, p9, { H: straightEntry(p9.H, p9.H[0].r, S.exitDeg / 2, S.exitLen), V: straightEntry(p9.V, p9.V[0].r, S.exitDeg / 2, S.exitLen) });
+    }
     return p9;
   }
   function profOfBase(horn, n) {
@@ -3778,7 +3990,15 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     { key: "wnFinU1", label: "Fin end (u)", unit: "", min: 0.3, max: 1.0, step: 0.02, sect: "geo", fams: { wn: 1 } },
     { key: "flareWrap", label: "Roundover wrap past mouth", unit: "\u00b0", min: 0, max: 135, step: 5, sect: "geo", notFams: { iwata: 1 } },
     { key: "flareR", label: "Mouth roundover R", unit: "mm", min: 0, max: 100, step: 2, sect: "geo", notFams: { jmlc: 1, iwata: 1 } },
-    { key: "thick", label: "Wall thickness (3-D)", unit: "mm", min: 2, max: 12, step: 0.5, sect: "geo", notFams: { iwata: 1, wn: 1 } }
+    { key: "thick", label: "Wall thickness (3-D)", unit: "mm", min: 2, max: 12, step: 0.5, sect: "geo", notFams: { iwata: 1, wn: 1 } },
+    { key: "exitLen", label: "Straight driver entry L (0 = off)", unit: "mm", min: 0, max: 40, step: 1, sect: "geo", notFams: { cd: 1, wn: 1, biradial: 1, iwata: 1 } },
+    { key: "exitDeg", label: "Driver exit angle (included)", unit: "\u00b0", min: 0, max: 30, step: 0.5, sect: "geo", notFams: { cd: 1, wn: 1, biradial: 1, iwata: 1 } },
+    { key: "plateT", label: "Driver plate thickness (0 = off)", unit: "mm", min: 0, max: 40, step: 0.5, sect: "geo", notFams: { wn: 1, biradial: 1, iwata: 1 } },
+    { key: "plateD", label: "Plate outer \u00d8 (0 = auto)", unit: "mm", min: 0, max: 320, step: 1, sect: "geo", notFams: { wn: 1, biradial: 1, iwata: 1 } },
+    { key: "boltRot", label: "Bolt pattern rotation", unit: "\u00b0", min: 0, max: 120, step: 1, sect: "geo", notFams: { wn: 1, biradial: 1, iwata: 1 } },
+    { key: "boltN", label: "Bolt count (0 = auto)", unit: "", min: 0, max: 8, step: 1, sect: "geo", notFams: { wn: 1, biradial: 1, iwata: 1 } },
+    { key: "boltCircleD", label: "Bolt circle \u00d8 (0 = auto: 76.2 / 101.6)", unit: "mm", min: 0, max: 180, step: 0.1, sect: "geo", notFams: { wn: 1, biradial: 1, iwata: 1 } },
+    { key: "boltHoleD", label: "Bolt hole \u00d8 (0 = auto: M6 clearance)", unit: "mm", min: 0, max: 12, step: 0.1, sect: "geo", notFams: { wn: 1, biradial: 1, iwata: 1 } }
   ];
   function paramHTML(p) {
     return '<div class="param" id="wrap_' + p.key + '">' +
@@ -3855,6 +4075,8 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     // hides and rt derives from sqrt(W*H/pi)); the pure-square option is gone.
     var throatSelHTML = '<select class="psel" id="throatSel" aria-label="Throat shape">' +
       [["round", "Throat: round"], ["rect", "Throat: rectangle W \u00d7 H"]].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === S.throatShape ? " selected" : "") + '>' + o[1] + "</option>"; }).join("") + '</select>';
+    var lipSelHTML = '<select class="psel" id="lipSel" aria-label="Mouth lip style">' +
+      [["round", "Mouth lip: rounded (bullnose)"], ["straight", "Mouth lip: straight (square cut)"]].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === S.lipStyle ? " selected" : "") + '>' + o[1] + "</option>"; }).join("") + '</select>';
     for (i = 0; i < PARAMS.length; i++) if (PARAMS[i].sect === "core") {
       if (PARAMS[i].key === "throatD") side += throatSelHTML;
       side += paramHTML(PARAMS[i]);
@@ -3871,7 +4093,10 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       
       '<select class="psel" id="spSel" aria-label="Mouth geometry">' +
       [["flat","flat mouth plane"],["sp","spherical mouth (stereographic proj.)"]].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === S.spProj ? " selected" : "") + '>' + o[1] + "</option>"; }).join("") + '</select>';
-    for (i = 0; i < PARAMS.length; i++) if (PARAMS[i].sect === "geo") side += paramHTML(PARAMS[i]);
+    for (i = 0; i < PARAMS.length; i++) if (PARAMS[i].sect === "geo") {
+      if (PARAMS[i].key === "flareR") side += lipSelHTML;   // entry 111: lip style directly above the mouth params
+      side += paramHTML(PARAMS[i]);
+    }
     side += '<div class="sect">EXPORT</div>' +
       '<button class="btn" id="exCsv">PROFILE CSV (H + V)</button>' +
       '<button class="btn" id="exAkabak" style="border-color:var(--ink)">AKABAK BEM MESH (.msh)</button>' +
@@ -3967,6 +4192,9 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     });
     document.getElementById("sectSel").addEventListener("change", function (e) { S.section = e.target.value; scheduleUpdate(); });
     // entry 93 (Marwan: "shouldn't we just do an option of square or round throat... as a toggle")
+    document.getElementById("lipSel").addEventListener("change", function (e) {
+      S.lipStyle = e.target.value; update();
+    });
     document.getElementById("throatSel").addEventListener("change", function (e) {
       S.throatShape = e.target.value;
       if (S.throatShape === "rect" && !(S.ribW > 0 && S.ribH > 0)) {
@@ -4165,6 +4393,8 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       var hvActive = S.petf && PETF_FAMILIES[S.family] && (S.TaddV !== S.Tadd || S.fmultV !== S.fmult);
       if (hvActive && (p.key === "aspect" || p.key === "flareR" || p.key === "flareWrap" || p.key === "cornerR" || p.key === "seN")) ok = false; // az-loft: per-plane PETF params ARE the shaping; rollbacks are the mouth
       if ((p.key === "ribW" || p.key === "ribH" || p.key === "ribL") && (S.family === "wn" || S.family === "biradial" || S.family === "iwata")) ok = false;   // entry 101: specialized throats
+      if (p.key === "exitDeg" && !(S.exitLen > 0)) ok = false;   // entry 104: sub-params follow their master (the rule)
+      if ((p.key === "plateD" || p.key === "boltN" || p.key === "boltCircleD" || p.key === "boltHoleD" || p.key === "boltRot") && !(S.plateT > 0)) ok = false;
       if ((p.key === "ribW" || p.key === "ribH") && S.throatShape !== "rect") ok = false;   // entry 93: the toggle drives them
       if (p.key === "ribL" && S.throatShape === "round") ok = false;
       if (p.key === "throatD" && S.throatShape === "rect") ok = false;   // entry 94: W x H defines the throat; rt = sqrt(WH/pi)
@@ -4490,12 +4720,63 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     var ringsOv = (S.family === "biradial" && horn && horn.fan) ? buildAraiFanRings(horn, segs, S.flareR, S.flareWrap)
                 : (S.family === "wn" && horn && horn.wn) ? buildWNRings(horn, segs, S.flareR, S.flareWrap) : null;
     var mesh = (S.family === "biradial" || S.family === "wn") ? buildInteriorMesh(prof, segs, ringsOv)   // interior acoustic surface, open by design
-             : buildSolidMesh(prof, S.thick, segs, ringsOv);
+             : buildSolidMesh(prof, S.thick, segs, ringsOv, S.lipStyle);
     if (S.family === "biradial" && S.fins !== "off" && horn && horn.finLayout)
       mesh = mergeMeshes([mesh, araiFinMesh(horn, S.finT || 10, S.fins === "arai4" ? horn.finLayoutArai4 : horn.finLayout)]);
     if (S.family === "wn" && S.wnFins > 0 && horn && horn.wn) {
       var _wf = wnFinMesh(horn, S.wnFinT, S.wnClear, 0.03, S.wnFinU1);
       if (_wf && _wf.length) mesh = mergeMeshes([mesh].concat(_wf));
+    }
+    // entry 104: DRIVER MOUNTING PLATE -- solid-mesh families only (interior
+    // surfaces are the acoustic export; the rule hides the params there).
+    if (S.plateT > 0 && S.family !== "wn" && S.family !== "biradial" && S.family !== "iwata") {
+      var dpd = driverPlateDefaults(S.throatD);
+      var pOut = (S.plateD > 0 ? S.plateD : dpd.outerD) / 2;
+      var pBC = (S.boltCircleD > 0 ? S.boltCircleD : dpd.bcD) / 2;
+      var pHole = (S.boltHoleD > 0 ? S.boltHoleD : dpd.holeD) / 2;
+      var pN = S.boltN > 0 ? Math.round(S.boltN) : dpd.boltN;
+      pOut = Math.max(pOut, pBC + pHole * 2.2);                          // the ring must contain the holes
+      var rtP = Math.max(2, prof.H[0].r !== undefined ? Math.min(prof.H[0].r, prof.V[0].r) : S.throatD / 2);
+      // entry 106: the bore CONES open through the 0.6 mm union overlap, following
+      // the wall's local slope (+0.05 clearance) so no lip protrudes into the airway
+      // entry 108: the bore SWEEPS the horn's own inner curve through the plate
+      // (below the throat: the straight driver bore) -- the horn cuts the plate.
+      function wallAt9(zq) {
+        var iq = 1; while (iq < prof.H.length - 1 && prof.H[iq].z < zq) iq++;
+        return Math.max(prof.H[iq].r, prof.V[iq].r) + 0.05;
+      }
+      // entry 110 (Marwan: "The driver plate should be flat with the horn mouth
+      // and not in front of it and the inside hole of the driver plate should
+      // follow the expansion of the horn"): the plate now occupies the FIRST
+      // plateT mm of the horn (z in [0, plateT]), back face FLUSH with the
+      // throat plane where the driver bolts on -- no added straight tube, the
+      // expansion starts at the driver face and runs THROUGH the plate. The
+      // bore follows the horn's inner profile + a ~1 mm recess (entry 109) so
+      // the horn's own wall remains the only interior surface.
+      function wallItp9(zq) {
+        var iq = 1; while (iq < prof.H.length - 1 && prof.H[iq].z < zq) iq++;
+        var A9 = prof.H[iq - 1], B9 = prof.H[iq], AV = prof.V[iq - 1], BV = prof.V[iq];
+        var f9 = (zq - A9.z) / (B9.z - A9.z + 1e-12); f9 = Math.max(0, Math.min(1, f9));
+        return Math.max(A9.r + f9 * (B9.r - A9.r), AV.r + f9 * (BV.r - AV.r));
+      }
+      var rec9 = Math.max(0.4, Math.min(1.0, (S.thick || 6) - 1.5));
+      var boreProf9 = [];
+      for (var iBp = 0; iBp <= 4; iBp++) {
+        var zBp = S.plateT * iBp / 4;
+        boreProf9.push({ z: zBp, r: wallItp9(zBp) + rec9 });
+      }
+      if (pBC - pHole > rtP + 1) {                                          // holes must clear the bore
+        var pm9 = buildDriverPlate(rtP, pOut, S.plateT, pN, pBC, pHole, S.plateT, 0, boreProf9);   // entry 110: z in [0, plateT], flush with the throat plane
+        if (S.boltRot) {                                                     // entry 106: pattern rotation = rotate the whole (rotationally symmetric) plate
+          var cR9 = Math.cos(S.boltRot * Math.PI / 180), sR9 = Math.sin(S.boltRot * Math.PI / 180);
+          for (var vP9 = 0; vP9 < pm9.pos.length; vP9 += 3) {
+            var xP9 = pm9.pos[vP9 + 1], yP9 = pm9.pos[vP9 + 2];
+            pm9.pos[vP9 + 1] = xP9 * cR9 - yP9 * sR9;
+            pm9.pos[vP9 + 2] = xP9 * sR9 + yP9 * cR9;
+          }
+        }
+        mesh = mergeMeshes([mesh, pm9]);
+      }
     }
     return mesh;
   }
