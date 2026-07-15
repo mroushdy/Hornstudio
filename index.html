@@ -3033,8 +3033,13 @@ function buildBEMProject(horn, prof, ringsOv, opts) {
           gTurn = Math.max(gTurn, Math.acos(cs));
         }
       }
-      gCum.push(gCum[g1] + gMx + thick * gTurn);
+      var gRm = 0;   // entry 127: mean ring radius -> local element width
+      for (var g4 = 0; g4 < sg0; g4++) { var gk4 = (g1 * sg0 + g4) * 3; gRm += Math.hypot(ringsOv.rings[gk4 + 1], ringsOv.rings[gk4 + 2]); }
+      var gW = opts.budget ? Math.max(0.5, 2 * Math.PI * (gRm / sg0) / segs) : 1;   // entry 127c
+      gCum.push(gCum[g1] + (gMx + thick * gTurn) / gW);
     }
+    if (opts.budget) nSta = Math.max(12, Math.min(nSta, Math.round(gCum[M0 - 1]) + 1));   // entry 127: budgeted path only
+    keep = [];
     var gTot = gCum[M0 - 1] || 1, gPtr = 0;
     for (var q = 0; q < nSta; q++) {
       var gT = gTot * q / (nSta - 1);
@@ -3054,9 +3059,39 @@ function buildBEMProject(horn, prof, ringsOv, opts) {
     function pz(p) { return p.z !== undefined ? p.z : p[0]; }
     function pr(p) { return p.r !== undefined ? p.r : p[1]; }
     var hCum = [0];
-    for (var h1 = 0; h1 < Mh - 1; h1++)
-      hCum.push(hCum[h1] + Math.hypot(pz(prof.H[h1 + 1]) - pz(prof.H[h1]), pr(prof.H[h1 + 1]) - pr(prof.H[h1]),
-        pr(prof.V[h1 + 1]) - pr(prof.V[h1])));
+    for (var h1 = 0; h1 < Mh - 1; h1++) {
+      var hGap = Math.hypot(pz(prof.H[h1 + 1]) - pz(prof.H[h1]), pr(prof.H[h1 + 1]) - pr(prof.H[h1]),
+        pr(prof.V[h1 + 1]) - pr(prof.V[h1]));
+      // entry 127 (user: "triangles on the throat and behind it are quite narrow
+      // slivers... BEM works better for equilateral"): divide the metric by the
+      // LOCAL element width (perimeter/segs) -- uniform slicing then equalizes
+      // ASPECT RATIO, packing stations where the horn is narrow.
+      var hW = opts.budget ? Math.max(0.5, Math.PI * (pr(prof.H[h1]) + pr(prof.V[h1])) / segs) : 1;   // entry 127c: square weighting ONLY when the count comes from the metric (budget path); fixed-count callers keep the legacy arc distribution
+      hCum.push(hCum[h1] + hGap / hW);
+    }
+    // entry 127: the metric total IS the near-square station count (each unit =
+    // one element-width of axial travel); opts.stations becomes the CAP. When a
+    // BUDGET binds, segs and stations are BALANCED (shrink segs, recompute the
+    // metric) so elements stay near-SQUARE at whatever size the budget affords
+    // (uniform coarse beats fine-but-sliver for BEM conditioning).
+    var hTot0 = hCum[Mh - 1];
+    if (opts.budget && 4 * segs * Math.min(Math.round(hTot0) + 1, 400) > opts.budget) {
+      for (var bal = 0; bal < 3; bal++) {
+        var need = Math.round(hCum[Mh - 1]) + 1;
+        var est9 = 4 * segs * Math.max(12, Math.min(need, 400));
+        if (est9 <= opts.budget * 1.1) break;
+        var sc9 = Math.sqrt(opts.budget / est9);
+        segs = Math.max(24, 4 * Math.round(segs * sc9 / 4));
+        hCum = [0];
+        for (var hb = 0; hb < Mh - 1; hb++) {
+          var gB9 = Math.hypot(pz(prof.H[hb + 1]) - pz(prof.H[hb]), pr(prof.H[hb + 1]) - pr(prof.H[hb]), pr(prof.V[hb + 1]) - pr(prof.V[hb]));
+          var wB9 = Math.max(0.5, Math.PI * (pr(prof.H[hb]) + pr(prof.V[hb])) / segs);
+          hCum.push(hCum[hb] + gB9 / wB9);
+        }
+      }
+    }
+    if (opts.budget) nSta = Math.max(12, Math.min(nSta, Math.round(hCum[Mh - 1]) + 1));   // entry 127: metric-derived count on the BUDGETED path only (explicit callers keep exact counts)
+    keep2 = [];
     var hTot = hCum[Mh - 1], hPtr = 0;
     if (!isFinite(hTot) || hTot <= 0) {      // guard: garbage metric -> uniform (regression 21 lesson)
       for (var qU = 0; qU < nSta; qU++) keep2.push(Math.round(qU * (Mh - 1) / (nSta - 1)));
@@ -3623,7 +3658,10 @@ function bemPoolPlan(jobElems, cores, deviceMemGB) {
 // plain wall sections of stations on full-roll horns.
 function bemBandSize(mouthPerMM, depthMM, fTop, budgetElems) {
   var eT = 344000 / (6 * fTop);
-  var segs = Math.max(48, 4 * Math.round(mouthPerMM / (eT / 2) / 4));
+  // entry 127: segs = perimeter/eT gives SQUARE elements at the mouth; the
+  // aspect-equalizing station metric owns the axial direction (the old eT/2
+  // azimuthal oversampling doubled the count for nothing).
+  var segs = Math.max(48, 4 * Math.round(mouthPerMM / eT / 4));
   var sta = Math.max(30, Math.round(depthMM * 1.6 / eT));
   var est = 4 * sta * segs;
   if (est > budgetElems) {
@@ -3690,7 +3728,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
 
   /* ================= state ================= */
   var S = {
-    family: "jmlc", fc: 400, throatD: 35.56, entryDeg: 0, T0: 0.7, trunc: 175, aplat: 4, ellMu: 0.88, ellSigma: 0.53, decoupeN: 0.3, decoupeP: 11, throatShape: "round", lipStyle: "round", bemF: 20000, bemSym: "full", ribW: 0, ribH: 0, ribL: 0, exitLen: 0, exitDeg: 10, plateT: 0, plateD: 0, boltN: 0, boltCircleD: 0, boltHoleD: 0, boltRot: 0,
+    family: "jmlc", fc: 400, throatD: 35.56, entryDeg: 0, T0: 0.7, trunc: 175, aplat: 4, ellMu: 0.88, ellSigma: 0.53, decoupeN: 0.3, decoupeP: 11, throatShape: "round", lipStyle: "round", bemF: 20000, bemSym: "full", dirOv: false, ribW: 0, ribH: 0, ribL: 0, exitLen: 0, exitDeg: 10, plateT: 0, plateD: 0, boltN: 0, boltCircleD: 0, boltHoleD: 0, boltRot: 0,
     petf: false, petfPreset: "off", petfShape: "exp", petfRef: "throat", Tadd: 3.5, fmult: 3, sOff: 0,
     fins: "off", shell: "uniform", finT: 10, adaptL: 25, wnUL: 0.5, wnUC: 0.68, showConstr: false, wnFins: 0, wnFinT: 1.0, wnClear: 0.4, wnFinU1: 0.7,
     aspect: 1.0, section: "ellipse", cornerR: 60, covH: 90, covV: 40, f0: 800, osK: 1.0, osS: 0.7, osN: 4, seN: 2.5, spProj: "flat", f0V: 0, TaddV: 0.4, fmultV: 2, rosR: 130, rosA: 39, rosA0: 7.5, rosK: 1.8, rosRr: 0.3, rosB: 0.3, rosM: 0.8, rosQ: 3.7, flareR: 20, flareWrap: 0, thick: 5
@@ -4200,6 +4238,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       '<span class="punit">' + p.unit + '</span></span></div>' +
       '<input type="range" id="rng_' + p.key + '" min="' + p.min + '" max="' + p.max + '" step="' + p.step + '" value="' + S[p.key] + '" aria-label="' + p.label + '"></div>';
   }
+  var lastDirEst = null;
   var lastAct = null, lastRef = null, lastProf = null;
   // entry 96: charts render standalone so the semantic zoom re-renders ONLY the
   // charts (windowed fArr recompute), not the geometry/3-D pipeline.
@@ -4251,6 +4290,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
         _pV = 2 * Math.atan2(_p9.b[_i9 + 4] - _p9.b[_i9 - 4], _p9.s[_i9 + 4] - _p9.s[_i9 - 4]) * 180 / Math.PI;
       }
       var _est = directivityEstimate(fArr, _mW, _mH, _pH, _pV);
+      lastDirEst = _est;   // entry 126: shared with the 3-D coverage overlay
       _bw.innerHTML = bwChartSVG(_est);
       _di.innerHTML = diChartSVG(_est);
     })();
@@ -4322,7 +4362,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       '<button class="btn" id="loadDesign" style="margin:0;flex:1">LOAD</button>' +
       '<input type="file" id="loadFile" accept=".json" style="display:none"></div>' + side + '</aside>' +
       '<main>' +
-      '<div style="padding:12px 16px;border-bottom:1px solid var(--line)"><div class="eyebrow" style="margin-bottom:6px">3-D PREVIEW \u2014 DRAG ROTATE \u00b7 WHEEL ZOOM <button class="btn" id="showConstr" style="display:none;width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">SHOW CONSTRUCTION</button></div>' +
+      '<div style="padding:12px 16px;border-bottom:1px solid var(--line)"><div class="eyebrow" style="margin-bottom:6px">3-D PREVIEW \u2014 DRAG ROTATE \u00b7 WHEEL ZOOM <button class="btn" id="showConstr" style="display:none;width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">SHOW CONSTRUCTION</button><button class="btn" id="dirOvBtn" style="width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">DIRECTIVITY: OFF</button></div>' +
       '<div id="view3d" style="width:100%;height:380px;background:#FFFFFF;touch-action:none;cursor:grab"></div>' +
       '<div id="v3dnote" style="font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:6px;letter-spacing:.04em"></div></div>' +
       '<div id="drawing" style="padding:10px 12px 0"></div>' +
@@ -4422,6 +4462,13 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     document.getElementById("bemSymSel").addEventListener("change", function (e) {
       S.bemSym = e.target.value;
     });
+    document.getElementById("dirOvBtn").addEventListener("click", function () {
+      S.dirOv = !S.dirOv;
+      this.textContent = "DIRECTIVITY: " + (S.dirOv ? "ON" : "OFF");
+      var nD = document.getElementById("v3dnote");
+      if (S.dirOv && nD) nD.textContent = "Coverage wedges: \u22126 dB GEOMETRIC estimate (Keele mouth-size relation) at 2 / 6.3 / 16 kHz, darker = higher f \u2014 an estimate, BEM is the arbiter";
+      update3D(lastAct);
+    });
     document.getElementById("lipSel").addEventListener("change", function (e) {
       S.lipStyle = e.target.value; update();
     });
@@ -4514,7 +4561,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
         else if (S.family === "wn" && lastAct.wn) rings9 = buildWNRings(lastAct, sz9.segs, 0, 0);
         var finM9 = (S.family === "wn" && S.wnFins > 0 && lastAct.wn) ? wnFinMesh(lastAct, S.wnFinT, S.wnClear, 0.03, S.wnFinU1) : null;
         var symReq9 = (S.bemSym === "quarter") && !rings9 && !(finM9 && finM9.length);   // entry 114: native entry-78 quarter (rings families and fins ineligible)
-        var bp9 = buildBEMProject(lastAct, prof9, rings9, { stations: sz9.stations, segs: sz9.segs, targetEdge: sz9.targetEdge, finMeshes: finM9, symmetry: symReq9 ? "quarter" : undefined });
+        var bp9 = buildBEMProject(lastAct, prof9, rings9, { stations: 400, segs: sz9.segs, targetEdge: sz9.targetEdge, budget: bud9, finMeshes: finM9, symmetry: symReq9 ? "quarter" : undefined });   // entry 127: metric-driven stations under a square-balancing budget
         saveBlob(fname("akabak_bem") + ".msh", new Blob([bemToMsh(bp9)], { type: "text/plain" }));   // entry 90: the ribbon throat is GEOMETRY now -- the SourceDisc group IS the rectangular throat face
         var nt9 = document.getElementById("v3dnote");
         if (nt9) nt9.textContent = ((S.ribW > 0 && S.ribH > 0 && S.family !== "wn" && S.family !== "biradial") ? "RIBBON THROAT " + S.ribW + "\u00d7" + S.ribH + " mm (SourceDisc = the rectangular face) \u00b7 " : "") + "AKABAK mesh saved: " + bp9.nBnd + " elements" + (bp9.sym === 2 ? " (QUARTER model -- enable BOTH symmetry planes in the solver; the cut planes pass through the horn axis)" : "") + " \u00b7 \u03bb/6 honest to " + Math.round(bp9.fMax) + " Hz \u00b7 mm units \u00b7 GMSH 2.2 \u00b7 drive the \"SourceDisc\" group (import: Project > Import Mesh File, scale mm)";
@@ -5094,6 +5141,37 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       }
       V3.constr.position.set(-cx, -cy, -cz);
       V3.group.add(V3.constr);
+    }
+    // entry 126 (Marwan: "is there a way to show a simple version of the
+    // directivity around the 3D model?"): -6 dB coverage wedges in the H and
+    // V planes at three frequencies, from the SAME geometric estimator as the
+    // beamwidth chart (Keele mouth-size relation) -- an estimate, not BEM.
+    if (V3.dirov) { V3.group.remove(V3.dirov); V3.dirov = null; }
+    if (S.dirOv && lastDirEst && lastDirEst.f && lastDirEst.f.length) {
+      V3.dirov = new THREE.Group();
+      var _zM = -1e9, _iD;
+      for (_iD = 0; _iD < horn.wall.length; _iD++) _zM = Math.max(_zM, horn.wall[_iD].z);
+      var _R = Math.max(60, _zM * 0.55);
+      var _bands = [2000, 6300, 16000], _shade = [0xB9B9B9, 0x8A8A8A, 0x3A3A3A];
+      for (var _b = 0; _b < 3; _b++) {
+        var _fi = 0, _bd = 1e9;
+        for (_iD = 0; _iD < lastDirEst.f.length; _iD++) if (Math.abs(lastDirEst.f[_iD] - _bands[_b]) < _bd) { _bd = Math.abs(lastDirEst.f[_iD] - _bands[_b]); _fi = _iD; }
+        var _mm = new THREE.LineBasicMaterial({ color: _shade[_b], transparent: true, opacity: 0.85 });
+        [[lastDirEst.bwH[_fi], true], [lastDirEst.bwV[_fi], false]].forEach(function (pl) {
+          var _hw = pl[0] * Math.PI / 360;   // half-angle in rad
+          var _pts = [], _a;
+          _pts.push(new THREE.Vector3(pl[1] ? _R * Math.sin(-_hw) : 0, _zM + _R * Math.cos(_hw), pl[1] ? 0 : _R * Math.sin(-_hw)));
+          _pts.push(new THREE.Vector3(0, _zM, 0));
+          _pts.push(new THREE.Vector3(pl[1] ? _R * Math.sin(_hw) : 0, _zM + _R * Math.cos(_hw), pl[1] ? 0 : _R * Math.sin(_hw)));
+          for (_a = 0; _a <= 24; _a++) {
+            var _ph = -_hw + 2 * _hw * _a / 24;
+            _pts.push(new THREE.Vector3(pl[1] ? _R * Math.sin(_ph) : 0, _zM + _R * Math.cos(_ph), pl[1] ? 0 : _R * Math.sin(_ph)));
+          }
+          V3.dirov.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(_pts), _mm));
+        });
+      }
+      V3.dirov.position.set(-cx, -cy, -cz);
+      V3.group.add(V3.dirov);
     }
     V3.fit = span * 1.9;
     V3.dist = Math.max(V3.fit * 0.4, Math.min(V3.fit * 5, V3.dist || V3.fit));
