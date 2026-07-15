@@ -3179,6 +3179,56 @@ function bemGradedWallAssembly(ringsKept, M, segs, thick, symQ, mode) {
   return { nodes: Float64Array.from(nodesA), tris: tris, nSrc: nSrc, NV: nodesA.length / 3, nArr: nArr,
            open: mode.baffle ? 1 : 0, rimSpan: rimZmax - rimZmin, capDepth: capR ? capLift(0) : 0 };
 }
+// entry 151 (Marwan: "when it downloads multiple files should it do it in a
+// zip file?"): STORE-ONLY ZIP writer (no compression -- text meshes, size
+// irrelevant; browsers gate multiple programmatic downloads and Boundary Lab
+// needs both files in ONE folder, which a zip enforces by construction).
+var _crcTable = null;
+function crc32(str) {
+  if (!_crcTable) {
+    _crcTable = new Int32Array(256);
+    for (var n = 0; n < 256; n++) {
+      var c = n;
+      for (var k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+      _crcTable[n] = c;
+    }
+  }
+  var crc = -1;
+  for (var i = 0; i < str.length; i++) crc = (crc >>> 8) ^ _crcTable[(crc ^ str.charCodeAt(i)) & 0xFF];
+  return (crc ^ -1) >>> 0;
+}
+function makeStoreZip(files) {   // files: [{ name, data (ASCII/UTF8-safe string) }] -> Uint8Array
+  var parts = [], central = [], offset = 0, i;
+  function u16(v) { return [v & 255, (v >> 8) & 255]; }
+  function u32(v) { return [v & 255, (v >> 8) & 255, (v >> 16) & 255, (v >>> 24) & 255]; }
+  for (i = 0; i < files.length; i++) {
+    var name = files[i].name, data = files[i].data;
+    var crc = crc32(data), sz = data.length;
+    var local = [0x50, 0x4B, 0x03, 0x04].concat(u16(20), u16(0), u16(0), u16(0), u16(0), u32(crc), u32(sz), u32(sz), u16(name.length), u16(0));
+    parts.push(new Uint8Array(local));
+    parts.push(Uint8Array.from(name, function (c) { return c.charCodeAt(0); }));
+    var body = new Uint8Array(sz);
+    for (var b = 0; b < sz; b++) body[b] = data.charCodeAt(b) & 255;
+    parts.push(body);
+    central.push({ name: name, crc: crc, sz: sz, off: offset });
+    offset += local.length + name.length + sz;
+  }
+  var cdStart = offset, cdLen = 0;
+  for (i = 0; i < central.length; i++) {
+    var e = central[i];
+    var cd = [0x50, 0x4B, 0x01, 0x02].concat(u16(20), u16(20), u16(0), u16(0), u16(0), u16(0), u32(e.crc), u32(e.sz), u32(e.sz), u16(e.name.length), u16(0), u16(0), u16(0), u16(0), u32(0), u32(e.off));
+    parts.push(new Uint8Array(cd));
+    parts.push(Uint8Array.from(e.name, function (c) { return c.charCodeAt(0); }));
+    cdLen += cd.length + e.name.length;
+  }
+  var eocd = [0x50, 0x4B, 0x05, 0x06].concat(u16(0), u16(0), u16(central.length), u16(central.length), u32(cdLen), u32(cdStart), u16(0));
+  parts.push(new Uint8Array(eocd));
+  var total = 0;
+  for (i = 0; i < parts.length; i++) total += parts[i].length;
+  var out = new Uint8Array(total), p = 0;
+  for (i = 0; i < parts.length; i++) { out.set(parts[i], p); p += parts[i].length; }
+  return out;
+}
 // entry 132: the entry-78 continuity-anchored vertex-normal offset, extracted
 // verbatim so the legacy and graded assemblies share one implementation.
 function bemOuterOffset(inner, M, PTS, thick, symQ) {
@@ -3667,6 +3717,24 @@ function buildBEMProject(horn, prof, ringsOv, opts) {
         tris.push([BR(tB, jB2), BR(tB, jB2 + 1), BR(tB + 1, jB2 + 1)]);
       }
   }
+  }
+  // entry 150 (bLab user: quarter mesh "not accepted accusing some NaN"):
+  // DEGENERATE GATE. Zero-area or duplicate-index triangles carry finite
+  // coordinates (the NaN gates pass) but become NaN the moment any solver
+  // normalizes their normals. Proven reachable from garbage-but-finite
+  // inputs -- so: throw, never save.
+  {
+    var dgn = 0;
+    for (var dg = 0; dg < tris.length; dg++) {
+      var tA = tris[dg][0], tB = tris[dg][1], tC = tris[dg][2];
+      if (tA === tB || tB === tC || tA === tC) { dgn++; continue; }
+      var ax9 = nodes[tA * 3], ay9 = nodes[tA * 3 + 1], az9 = nodes[tA * 3 + 2];
+      var ux9 = nodes[tB * 3] - ax9, uy9 = nodes[tB * 3 + 1] - ay9, uz9 = nodes[tB * 3 + 2] - az9;
+      var vx9 = nodes[tC * 3] - ax9, vy9 = nodes[tC * 3 + 1] - ay9, vz9 = nodes[tC * 3 + 2] - az9;
+      if (Math.hypot(uy9 * vz9 - uz9 * vy9, uz9 * vx9 - ux9 * vz9, ux9 * vy9 - uy9 * vx9) < 1e-10) dgn++;
+    }
+    if (dgn > 0)
+      throw new Error("BEM export aborted: " + dgn + " degenerate (zero-area) elements -- check the parameters (these become NaN in the solver)");
   }
   // entry 129: mesh QUALITY REPORT (aspect stats) -- computed here so every
   // export can state its own element quality alongside the lambda/6 honesty.
@@ -5195,7 +5263,8 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
         var cur9 = buildCurrentBEM();
         var bp9 = cur9.bp, blab9 = cur9.blab;
         var mshName9 = fname(blab9 ? "blab_bem" : (cur9.baffle ? "akabak_baffle_bem" : "akabak_bem")) + ".msh";
-        saveBlob(mshName9, new Blob([bemToMsh(bp9)], { type: "text/plain" }));
+        var mshText9 = bemToMsh(bp9);
+        if (!blab9) saveBlob(mshName9, new Blob([mshText9], { type: "text/plain" }));
         if (blab9) {
           // entry 139: a ready-to-open Boundary Lab PROJECT next to the mesh --
           // schema from project_io.py/dialogs.py (verified against their reader):
@@ -5225,10 +5294,17 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
               "main": { delay_ms: 0.0, hpf: {}, level_db: 0.0, lpf: {}, polarity: 1 }
             }
           };
-          saveBlob(fname("blab_project") + ".blab.json", new Blob([JSON.stringify(proj9, null, 2)], { type: "application/json" }));
+          // entry 151: ONE download, not two -- browsers gate multiple
+          // programmatic downloads, and Boundary Lab needs both files in the
+          // same folder anyway. Store-only zip (mesh + ready-to-open project).
+          var zip9 = makeStoreZip([
+            { name: mshName9, data: mshText9 },
+            { name: fname("blab_project") + ".blab.json", data: JSON.stringify(proj9, null, 2) }
+          ]);
+          saveBlob(fname("blab") + ".zip", new Blob([zip9], { type: "application/zip" }));
         }   // entry 90: the ribbon throat is GEOMETRY now -- the SourceDisc group IS the rectangular throat face
         var nt9 = document.getElementById("v3dnote");
-        if (nt9) nt9.textContent = ((S.ribW > 0 && S.ribH > 0 && S.family !== "wn" && S.family !== "biradial") ? "RIBBON THROAT " + S.ribW + "\u00d7" + S.ribH + " mm (SourceDisc = the rectangular face) \u00b7 " : "") + (blab9 ? "Boundary Lab mesh saved: " : "AKABAK mesh saved: ") + bp9.nBnd + " elements · quality: " + Math.round(100 * bp9.qUnder2 / bp9.nBnd) + "% under 2:1 aspect, worst " + bp9.qWorst.toFixed(1) + ":1" + (bp9.sym === 2 ? " (QUARTER model -- enable BOTH symmetry planes in the solver; the cut planes pass through the horn axis)" : "") + " \u00b7 \u03bb/6 honest to " + Math.round(bp9.fMax) + " Hz \u00b7 graded mesh" + (cur9.cap ? " \u00b7 spherical-cap source, depth " + bp9.capDepth.toFixed(1) + " mm (wavefront \u22a5 walls)" : "") + (cur9.baffle ? " \u00b7 INFINITE BAFFLE model: open mouth rim on the baffle plane (rim planarity " + bp9.rimSpan.toFixed(2) + " mm" + (bp9.rimSpan > 2 ? " \u2014 ROLLED mouth, consider free-standing" : "") + "); AKABAK SimType: Infinite Baffle" : "") + " \u00b7 mm units \u00b7 GMSH 2.2 \u00b7 " + (blab9 ? "Boundary Lab: a ready-to-open .blab.json PROJECT is saved with the mesh (put both in one folder, File > Open Project) \u2014 SourceDisc pre-assigned as the driven radiator" + (bp9.sym === 2 ? "; set Symmetry = XY (BEAT engine backend)" : "") : "AKABAK: Project > Import Mesh File (scale mm), drive \"SourceDisc\" (tag 1)");   // entries 132/133/134/137
+        if (nt9) nt9.textContent = ((S.ribW > 0 && S.ribH > 0 && S.family !== "wn" && S.family !== "biradial") ? "RIBBON THROAT " + S.ribW + "\u00d7" + S.ribH + " mm (SourceDisc = the rectangular face) \u00b7 " : "") + (blab9 ? "Boundary Lab mesh saved: " : "AKABAK mesh saved: ") + bp9.nBnd + " elements · quality: " + Math.round(100 * bp9.qUnder2 / bp9.nBnd) + "% under 2:1 aspect, worst " + bp9.qWorst.toFixed(1) + ":1" + (bp9.sym === 2 ? " (QUARTER model -- enable BOTH symmetry planes in the solver; the cut planes pass through the horn axis)" : "") + " \u00b7 \u03bb/6 honest to " + Math.round(bp9.fMax) + " Hz \u00b7 graded mesh" + (cur9.cap ? " \u00b7 spherical-cap source, depth " + bp9.capDepth.toFixed(1) + " mm (wavefront \u22a5 walls)" : "") + (cur9.baffle ? " \u00b7 INFINITE BAFFLE model: open mouth rim on the baffle plane (rim planarity " + bp9.rimSpan.toFixed(2) + " mm" + (bp9.rimSpan > 2 ? " \u2014 ROLLED mouth, consider free-standing" : "") + "); AKABAK SimType: Infinite Baffle" : "") + " \u00b7 mm units \u00b7 GMSH 2.2 \u00b7 " + (blab9 ? "Boundary Lab: ONE ZIP with the mesh + a ready-to-open .blab.json PROJECT (unzip to a folder, File > Open Project) \u2014 SourceDisc pre-assigned as the driven radiator" + (bp9.sym === 2 ? "; set Symmetry = XY (BEAT engine backend)" : "") : "AKABAK: Project > Import Mesh File (scale mm), drive \"SourceDisc\" (tag 1)");   // entries 132/133/134/137
       } catch (e9) { var nt8 = document.getElementById("v3dnote"); if (nt8) nt8.textContent = "AKABAK export failed: " + e9; }
     });
     // entry 89 + 95 (forum): INTERACTIVE GRAPHS -- the drawing AND every SVG chart.
