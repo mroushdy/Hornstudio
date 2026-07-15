@@ -31,6 +31,24 @@
      pane -- scroll the page to put a chart in view, then scroll INSIDE the
      panel to reach any control; the chart never leaves the screen. */
   aside{flex:0 0 262px;min-width:240px;padding:14px 16px 8px;border-right:1px solid var(--line);background:var(--panel);box-sizing:border-box;position:sticky;top:0;max-height:100vh;overflow-y:auto;align-self:flex-start;}
+  /* entry 115 (Marwan: "doesnt work well on mobile... the horn viewer drops
+     down but the slider menu is still sticky"): sticky is only correct in the
+     two-column layout. Once the columns wrap (narrow viewport), the panel
+     returns to normal flow and the 3-D viewer shrinks. */
+  /* entry 116: typeset mathematics card -- browsers render MathML in a real
+     math font; give it room, centering, and quiet annotations. */
+  /* entry 117: white paper for the equations + an elegant math font stack --
+     STIX Two Math (ships with macOS), Cambria Math (Windows), Latin Modern
+     (TeX systems); the browser's MathML engine does the typesetting. */
+  .mathcard{background:#FFFFFF;padding:16px 18px 8px;margin-top:6px;overflow-x:auto;}   /* entry 118: borderless -- equations on open paper */
+  .mathcard math{font-family:"STIX Two Math","Latin Modern Math","Cambria Math","XITS Math","Asana Math",math,serif;}
+  .mathcard math[display="block"]{font-size:20px;margin:0 auto 16px;display:block;text-align:center;color:#000;}   /* entry 117b: true black ink on white */
+  .mathcard mtext{font-size:70%;color:#555;font-family:var(--mono);letter-spacing:.03em;}
+  @media (max-width: 900px) {
+    aside{position:static;max-height:none;overflow-y:visible;flex:1 1 100%;border-right:none;border-bottom:1px solid var(--line);}
+    #view3d{height:280px !important;}
+    .mathcard math[display="block"]{font-size:16px;}
+  }
   main{flex:1 1 460px;min-width:300px;}
   .sect{font-family:var(--mono);font-size:9px;letter-spacing:.2em;color:var(--faint);margin:14px 0 8px;padding-top:10px;border-top:1px solid var(--line);}
   .sect:first-child{margin-top:0;padding-top:0;border-top:none;}
@@ -58,7 +76,14 @@
   .stat .k{font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin-bottom:2px;}
   .stat .v{font-family:var(--mono);font-size:15px;color:var(--ink);}
   .lower{display:flex;flex-wrap:wrap;gap:14px;border-top:1px solid var(--line);padding:12px 16px;align-items:flex-start;}
-  .eqs{flex:1 1 250px;font-family:var(--mono);font-size:10px;line-height:1.65;color:var(--faint);max-width:400px;}
+  /* entry 119 (Marwan: "why is the math and the notes section not the full
+     width?"): #eqs was a sixth chart tile (flex 250px, capped 400px). It is
+     now its own full-width band: equations centered on paper at a reading
+     measure, method notes flowing in datasheet columns. */
+  .eqs{flex:1 1 100%;font-family:var(--mono);font-size:10px;line-height:1.65;color:var(--faint);border-top:1px solid var(--line);padding-top:12px;margin-top:4px;}
+  .eqs .mathcard{max-width:760px;margin:6px auto 0;}
+  .eqs .mnotes{columns:320px 3;column-gap:32px;margin-top:6px;}
+  .eqs .mnotes p{margin:0 0 10px;break-inside:avoid;}
   footer{border-top:1px solid var(--gridmaj);padding:8px 20px;font-family:var(--mono);font-size:9px;letter-spacing:.06em;color:var(--faint);display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;}
   @media (prefers-reduced-motion:reduce){*{transition:none!important;}}
   #errbox{display:none;background:#1C1C1C;color:#fff;padding:10px 14px;font-family:var(--mono);font-size:12px;white-space:pre-wrap;margin:0 auto 12px;max-width:1240px;border-radius:2px;}
@@ -4905,8 +4930,12 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     document.getElementById("stats").innerHTML = st;
     var _fcnt = document.getElementById("tbFamCount"); if (_fcnt) _fcnt.textContent = String(Object.keys(FAMILY_MATH).length + 1); // 11 families (swh covers ewf via aspect; +wn... count from the family select)
     var _fsel9 = document.getElementById("familySel"); if (_fcnt && _fsel9 && _fsel9.options && _fsel9.options.length) _fcnt.textContent = String(_fsel9.options.length);
-    var _eqs = document.getElementById("eqs"); if (_eqs) _eqs.innerHTML = methodBlurb() +
-      (FAMILY_MATH[S.family] ? '<div class="eyebrow" style="margin-top:12px">MATHEMATICS</div><div style="font-size:13px;overflow-x:auto">' + FAMILY_MATH[S.family] + '</div>' : '');
+    // entry 116 (Marwan: "move this text to the bottom and show the mathematics
+    // above it in a more elegant way"): equations first in a typeset card,
+    // the method prose below.
+    var _eqs = document.getElementById("eqs"); if (_eqs) _eqs.innerHTML =
+      (FAMILY_MATH[S.family] ? '<div class="eyebrow">MATHEMATICS \u2014 ' + (FAMILY_NAMES[S.family] || S.family).toUpperCase() + '</div><div class="mathcard">' + FAMILY_MATH[S.family] + '</div>' : '') +
+      '<div class="eyebrow" style="margin-top:14px">METHOD NOTES</div><div class="mnotes"><p>' + methodBlurb().replace(/<br\s*\/?>(\s*<br\s*\/?>)?/g, '</p><p>') + '</p></div>';
     update3D(lastAct);
   }
 
