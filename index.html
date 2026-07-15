@@ -26,7 +26,11 @@
   .tb div{padding:12px 14px;border-right:1px solid var(--line);}
   .tb .k{color:var(--faint);letter-spacing:.12em;}.tb .v{margin-top:4px;}
   .cols{display:flex;flex-wrap:wrap;}
-  aside{flex:0 0 262px;min-width:240px;padding:14px 16px 8px;border-right:1px solid var(--line);background:var(--panel);box-sizing:border-box;}
+  /* entry 112 (user feedback: "make sure that all the controls are visible
+     together with the graphs"): the params column is its own sticky scroll
+     pane -- scroll the page to put a chart in view, then scroll INSIDE the
+     panel to reach any control; the chart never leaves the screen. */
+  aside{flex:0 0 262px;min-width:240px;padding:14px 16px 8px;border-right:1px solid var(--line);background:var(--panel);box-sizing:border-box;position:sticky;top:0;max-height:100vh;overflow-y:auto;align-self:flex-start;}
   main{flex:1 1 460px;min-width:300px;}
   .sect{font-family:var(--mono);font-size:9px;letter-spacing:.2em;color:var(--faint);margin:14px 0 8px;padding-top:10px;border-top:1px solid var(--line);}
   .sect:first-child{margin-top:0;padding-top:0;border-top:none;}
@@ -3359,6 +3363,165 @@ function stepFromMesh(pos, idx, name) {
 // request: ribbon drivers / rectangular radiators -- Akabak drives whichever
 // group you assign, so the split IS the feature. The rectangle boundary is
 // stair-stepped at element resolution (the cap is the densest region anyway).
+// ===== NURBS STEP (entry 112, user feedback: "the .step file created is being
+// inserted into Fusion 360 as a mesh") ===== The faceted BREP is thousands of
+// planar faces; CAD wants ONE spline surface. nurbsLoft globally INTERPOLATES
+// the inner ring grid with a bicubic B-spline (banded solves per direction --
+// the surface passes THROUGH every ring point), evalNurbs (de Boor) self-tests
+// the interpolation, stepFromNurbs writes it as a single ADVANCED_FACE.
+function bsplineBasis(deg, knots, nCtrl, t) {
+  var N = new Float64Array(nCtrl), lo = deg, hi = knots.length - deg - 1;
+  if (t <= knots[lo]) t = knots[lo] + 1e-12;
+  if (t >= knots[hi]) t = knots[hi] - 1e-12;
+  var span = lo;
+  while (span < hi - 1 && t >= knots[span + 1]) span++;
+  var left = [], right = [], Nl = [1], j, r;
+  for (j = 1; j <= deg; j++) {
+    left[j] = t - knots[span + 1 - j]; right[j] = knots[span + j] - t;
+    var saved = 0;
+    for (r = 0; r < j; r++) {
+      var tmp = Nl[r] / (right[r + 1] + left[j - r]);
+      Nl[r] = saved + right[r + 1] * tmp;
+      saved = left[j - r] * tmp;
+    }
+    Nl[j] = saved;
+  }
+  for (j = 0; j <= deg; j++) N[span - deg + j] = Nl[j];
+  return N;
+}
+function bandedInterp(params, knots, data, nCtrl) {
+  // data: array of n points (each [x,y,z]); returns nCtrl control points.
+  var n = data.length, deg = 3, A = [], i, j;
+  for (i = 0; i < n; i++) A.push(bsplineBasis(deg, knots, nCtrl, params[i]));
+  // dense Gaussian with partial pivot (n <= ~260 -- instant)
+  var M9 = [], P = [];
+  for (i = 0; i < n; i++) { M9.push(Array.from(A[i])); P.push([data[i][0], data[i][1], data[i][2]]); }
+  for (i = 0; i < n; i++) {
+    var piv = i;
+    for (j = i + 1; j < n; j++) if (Math.abs(M9[j][i]) > Math.abs(M9[piv][i])) piv = j;
+    var t9 = M9[i]; M9[i] = M9[piv]; M9[piv] = t9; t9 = P[i]; P[i] = P[piv]; P[piv] = t9;
+    var d9 = M9[i][i] || 1e-14;
+    for (j = i + 1; j < n; j++) {
+      var f9 = M9[j][i] / d9; if (!f9) continue;
+      for (var k9 = i; k9 < n; k9++) M9[j][k9] -= f9 * M9[i][k9];
+      P[j][0] -= f9 * P[i][0]; P[j][1] -= f9 * P[i][1]; P[j][2] -= f9 * P[i][2];
+    }
+  }
+  var out = new Array(n);
+  for (i = n - 1; i >= 0; i--) {
+    var rx = P[i][0], ry = P[i][1], rz = P[i][2];
+    for (j = i + 1; j < n; j++) { rx -= M9[i][j] * out[j][0]; ry -= M9[i][j] * out[j][1]; rz -= M9[i][j] * out[j][2]; }
+    var dd = M9[i][i] || 1e-14;
+    out[i] = [rx / dd, ry / dd, rz / dd];
+  }
+  return out;
+}
+function chordParams(pts) {
+  var u = [0], i, tot = 0;
+  for (i = 1; i < pts.length; i++) { tot += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1], pts[i][2] - pts[i - 1][2]); u.push(tot); }
+  if (tot < 1e-12) for (i = 0; i < u.length; i++) u[i] = i / (u.length - 1);
+  else for (i = 0; i < u.length; i++) u[i] /= tot;
+  return u;
+}
+function avgKnots(params, deg) {
+  var n = params.length, U = [], i, j;
+  for (i = 0; i <= deg; i++) U.push(0);
+  for (j = 1; j <= n - deg - 1; j++) {
+    var s9 = 0;
+    for (i = j; i < j + deg; i++) s9 += params[i];
+    U.push(s9 / deg);
+  }
+  for (i = 0; i <= deg; i++) U.push(1);
+  return U;
+}
+function nurbsLoft(rings, M, segs) {
+  // grid: M stations x (segs + 1) columns (seam duplicated to close the tube)
+  var nv = segs + 1, P = [], i, j;
+  for (i = 0; i < M; i++) { var row = []; for (j = 0; j < nv; j++) { var k9 = (i * segs + (j % segs)) * 3; row.push([rings[k9], rings[k9 + 1], rings[k9 + 2]]); } P.push(row); }
+  // averaged parameters
+  var uP = new Float64Array(M), vP = new Float64Array(nv);
+  for (j = 0; j < nv; j++) { var col = []; for (i = 0; i < M; i++) col.push(P[i][j]); var cu = chordParams(col); for (i = 0; i < M; i++) uP[i] += cu[i] / nv; }
+  for (i = 0; i < M; i++) { var rw = chordParams(P[i]); for (j = 0; j < nv; j++) vP[j] += rw[j] / M; }
+  var kU = avgKnots(Array.from(uP), 3), kV = avgKnots(Array.from(vP), 3);
+  // interpolate columns (u direction), then rows (v direction)
+  var R = [];
+  for (j = 0; j < nv; j++) { var colD = []; for (i = 0; i < M; i++) colD.push(P[i][j]); R.push(bandedInterp(Array.from(uP), kU, colD, M)); }
+  var ctrl = [];
+  for (i = 0; i < M; i++) { var rowD = []; for (j = 0; j < nv; j++) rowD.push(R[j][i]); ctrl.push(bandedInterp(Array.from(vP), kV, rowD, nv)); }
+  return { ctrl: ctrl, kU: kU, kV: kV, nu: M, nv: nv, uP: uP, vP: vP, grid: P };
+}
+function evalNurbs(sf, u, v) {
+  var Nu = bsplineBasis(3, sf.kU, sf.nu, u), Nv = bsplineBasis(3, sf.kV, sf.nv, v);
+  var x = 0, y = 0, z = 0, i, j;
+  for (i = 0; i < sf.nu; i++) { if (!Nu[i]) continue;
+    for (j = 0; j < sf.nv; j++) { if (!Nv[j]) continue;
+      var w9 = Nu[i] * Nv[j], c9 = sf.ctrl[i][j];
+      x += w9 * c9[0]; y += w9 * c9[1]; z += w9 * c9[2];
+    } }
+  return [x, y, z];
+}
+function stepFromNurbs(sf, name) {
+  var L = [], id = 0;
+  function E9(txt) { id++; L.push("#" + id + "=" + txt + ";"); return id; }
+  function knotStr(K) {
+    // collapse to (multiplicities, knots)
+    var ks = [], ms = [], i;
+    for (i = 0; i < K.length; i++) {
+      if (ks.length && Math.abs(K[i] - ks[ks.length - 1]) < 1e-12) ms[ms.length - 1]++;
+      else { ks.push(K[i]); ms.push(1); }
+    }
+    return { m: "(" + ms.join(",") + ")", k: "(" + ks.map(function (x) { return x.toFixed(9); }).join(",") + ")" };
+  }
+  var i, j;
+  // control points
+  var cpIds = [];
+  for (i = 0; i < sf.nu; i++) { var rowI = [];
+    for (j = 0; j < sf.nv; j++) { var c9 = sf.ctrl[i][j];
+      rowI.push(E9("CARTESIAN_POINT('',(" + c9[0].toFixed(6) + "," + c9[1].toFixed(6) + "," + c9[2].toFixed(6) + "))")); }
+    cpIds.push(rowI); }
+  var grid = "(" + cpIds.map(function (r) { return "(" + r.map(function (x) { return "#" + x; }).join(",") + ")"; }).join(",") + ")";
+  var ku = knotStr(sf.kU), kv = knotStr(sf.kV);
+  var surf = E9("B_SPLINE_SURFACE_WITH_KNOTS('" + name + "',3,3," + grid + ",.UNSPECIFIED.,.F.,.F.,.F.," + ku.m + "," + kv.m + "," + ku.k + "," + kv.k + ",.UNSPECIFIED.)");
+  // boundary vertices (corners of the parameter rectangle)
+  function cp(p9) { return E9("CARTESIAN_POINT('',(" + p9[0].toFixed(6) + "," + p9[1].toFixed(6) + "," + p9[2].toFixed(6) + "))"); }
+  var c00 = evalNurbs(sf, 0, 0), c10 = evalNurbs(sf, 1, 0), c01 = evalNurbs(sf, 0, 1), c11 = evalNurbs(sf, 1, 1);
+  var v00 = E9("VERTEX_POINT('',#" + cp(c00) + ")"), v10 = E9("VERTEX_POINT('',#" + cp(c10) + ")");
+  var v01 = E9("VERTEX_POINT('',#" + cp(c01) + ")"), v11 = E9("VERTEX_POINT('',#" + cp(c11) + ")");
+  // boundary curves = control-net border rows/cols with matching knots
+  function curve(pts, kk) {
+    var ids9 = pts.map(function (p9) { return "#" + cp(p9); });
+    var ks9 = knotStr(kk);
+    return E9("B_SPLINE_CURVE_WITH_KNOTS('',3,(" + ids9.join(",") + "),.UNSPECIFIED.,.F.,.F.," + ks9.m + "," + ks9.k + ",.UNSPECIFIED.)");
+  }
+  var cu0 = curve(sf.ctrl[0], sf.kV);                                        // u = 0 (throat ring)
+  var cu1 = curve(sf.ctrl[sf.nu - 1], sf.kV);                                // u = 1 (mouth ring)
+  var cv0 = curve(sf.ctrl.map(function (r) { return r[0]; }), sf.kU);        // v = 0 seam
+  var cv1 = curve(sf.ctrl.map(function (r) { return r[sf.nv - 1]; }), sf.kU); // v = 1 seam
+  function edge(vA, vB, cId) { return E9("EDGE_CURVE('',#" + vA + ",#" + vB + ",#" + cId + ",.T.)"); }
+  var e0 = edge(v00, v01, cu0), e1 = edge(v01, v11, cv1), e2 = edge(v10, v11, cu1), e3 = edge(v00, v10, cv0);
+  var loop = E9("EDGE_LOOP('',(#" + E9("ORIENTED_EDGE('',*,*,#" + e0 + ",.T.)") + ",#" + E9("ORIENTED_EDGE('',*,*,#" + e1 + ",.T.)") + ",#" + E9("ORIENTED_EDGE('',*,*,#" + e2 + ",.F.)") + ",#" + E9("ORIENTED_EDGE('',*,*,#" + e3 + ",.F.)") + "))");
+  var face = E9("ADVANCED_FACE('',(#" + E9("FACE_OUTER_BOUND('',#" + loop + ",.T.)") + "),#" + surf + ",.T.)");
+  var shell = E9("OPEN_SHELL('',(#" + face + "))");
+  var model = E9("SHELL_BASED_SURFACE_MODEL('" + name + "',(#" + shell + "))");
+  // representation context (mm)
+  var lenU = E9("(LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT(.MILLI.,.METRE.))");
+  var angU = E9("(NAMED_UNIT(*)PLANE_ANGLE_UNIT()SI_UNIT($,.RADIAN.))");
+  var solU = E9("(NAMED_UNIT(*)SI_UNIT($,.STERADIAN.)SOLID_ANGLE_UNIT())");
+  var tol = E9("UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(1.E-3),#" + lenU + ",'distance_accuracy_value','')");
+  var ctx = E9("(GEOMETRIC_REPRESENTATION_CONTEXT(3)GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#" + tol + "))GLOBAL_UNIT_ASSIGNED_CONTEXT((#" + lenU + ",#" + angU + ",#" + solU + "))REPRESENTATION_CONTEXT('','3D'))");
+  var rep = E9("MANIFOLD_SURFACE_SHAPE_REPRESENTATION('" + name + "',(#" + model + "),#" + ctx + ")");
+  // product skeleton
+  var app = E9("APPLICATION_CONTEXT('core data for automotive mechanical design processes')");
+  var pdc = E9("PRODUCT_DEFINITION_CONTEXT('part definition',#" + app + ",'design')");
+  var pc = E9("PRODUCT_CONTEXT('',#" + app + ",'mechanical')");
+  var prod = E9("PRODUCT('" + name + "','" + name + "','',(#" + pc + "))");
+  var pdf = E9("PRODUCT_DEFINITION_FORMATION('','',#" + prod + ")");
+  var pd = E9("PRODUCT_DEFINITION('design','',#" + pdf + ",#" + pdc + ")");
+  var pds = E9("PRODUCT_DEFINITION_SHAPE('','',#" + pd + ")");
+  E9("SHAPE_DEFINITION_REPRESENTATION(#" + pds + ",#" + rep + ")");
+  var head = "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('Horn Studio NURBS surface'),'2;1');\nFILE_NAME('" + name + ".step','',(''),(''),'Horn Studio','','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));\nENDSEC;\nDATA;\n";
+  return head + L.join("\n") + "\nENDSEC;\nEND-ISO-10303-21;\n";
+}
 function bemToMsh(bp, opts) {
   opts = opts || {};
   var rib = (opts.ribbonW > 0 && opts.ribbonH > 0) ? { w: opts.ribbonW / 2000, h: opts.ribbonH / 2000 } : null;   // half-sizes in METERS (objNodes units)
@@ -3497,7 +3660,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
 
   /* ================= state ================= */
   var S = {
-    family: "jmlc", fc: 400, throatD: 35.56, entryDeg: 0, T0: 0.7, trunc: 175, aplat: 4, ellMu: 0.88, ellSigma: 0.53, decoupeN: 0.3, decoupeP: 11, throatShape: "round", lipStyle: "round", ribW: 0, ribH: 0, ribL: 0, exitLen: 0, exitDeg: 10, plateT: 0, plateD: 0, boltN: 0, boltCircleD: 0, boltHoleD: 0, boltRot: 0,
+    family: "jmlc", fc: 400, throatD: 35.56, entryDeg: 0, T0: 0.7, trunc: 175, aplat: 4, ellMu: 0.88, ellSigma: 0.53, decoupeN: 0.3, decoupeP: 11, throatShape: "round", lipStyle: "round", bemF: 20000, ribW: 0, ribH: 0, ribL: 0, exitLen: 0, exitDeg: 10, plateT: 0, plateD: 0, boltN: 0, boltCircleD: 0, boltHoleD: 0, boltRot: 0,
     petf: false, petfPreset: "off", petfShape: "exp", petfRef: "throat", Tadd: 3.5, fmult: 3, sOff: 0,
     fins: "off", shell: "uniform", finT: 10, adaptL: 25, wnUL: 0.5, wnUC: 0.68, showConstr: false, wnFins: 0, wnFinT: 1.0, wnClear: 0.4, wnFinU1: 0.7,
     aspect: 1.0, section: "ellipse", cornerR: 60, covH: 90, covV: 40, f0: 800, osK: 1.0, osS: 0.7, osN: 4, seN: 2.5, spProj: "flat", f0V: 0, TaddV: 0.4, fmultV: 2, rosR: 130, rosA: 39, rosA0: 7.5, rosK: 1.8, rosRr: 0.3, rosB: 0.3, rosM: 0.8, rosQ: 3.7, flareR: 20, flareWrap: 0, thick: 5
@@ -3946,9 +4109,9 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
   /* ================= UI ================= */
   var PARAMS = [
     { key: "fc", label: "Cut-off fc", unit: "Hz", min: 150, max: 10000, step: 5, sect: "core", fams: { jmlc: 1, jmlcell: 1, iwata: 1, swh: 1, tractrix: 1, hypex: 1, conical: 1, cd: 1, biradial: 1, wn: 1 } },
-    { key: "throatD", label: "Throat \u00d8", unit: "mm", min: 4, max: 76, step: 0.01, sect: "core" },   // entry 89: forum request, tiny horns (3 cm tractrix, 5 mm throats)
-    { key: "ribW", label: "Rect throat W", unit: "mm", min: 0, max: 200, step: 0.5, sect: "core", fams: { jmlc: 1, jmlcell: 1, swh: 1, tractrix: 1, hypex: 1, conical: 1, cd: 1, os: 1, osc: 1, rosse: 1 } },
-    { key: "ribH", label: "Rect throat H", unit: "mm", min: 0, max: 200, step: 0.5, sect: "core", fams: { jmlc: 1, jmlcell: 1, swh: 1, tractrix: 1, hypex: 1, conical: 1, cd: 1, os: 1, osc: 1, rosse: 1 } },
+    { key: "throatD", label: "Throat \u00d8", unit: "mm", min: 4, max: 120, step: 0.01, sect: "core" },   // entry 89: forum request, tiny horns (3 cm tractrix, 5 mm throats)
+    { key: "ribW", label: "Rect throat W", unit: "mm", min: 0, max: 320, step: 0.5, sect: "core", fams: { jmlc: 1, jmlcell: 1, swh: 1, tractrix: 1, hypex: 1, conical: 1, cd: 1, os: 1, osc: 1, rosse: 1 } },
+    { key: "ribH", label: "Rect throat H", unit: "mm", min: 0, max: 320, step: 0.5, sect: "core", fams: { jmlc: 1, jmlcell: 1, swh: 1, tractrix: 1, hypex: 1, conical: 1, cd: 1, os: 1, osc: 1, rosse: 1 } },
     { key: "ribL", label: "Throat transition length (0 = auto)", unit: "mm", min: 0, max: 300, step: 1, sect: "core", fams: { jmlc: 1, jmlcell: 1, swh: 1, tractrix: 1, hypex: 1, conical: 1, cd: 1, os: 1, osc: 1, rosse: 1 } },
     { key: "entryDeg", label: "Entry / cone angle (quasi-ell: 0 = JMLC natural)", unit: "\u00b0", min: 0, max: 30, step: 0.5, sect: "core", fams: { jmlc: 1, jmlcell: 1, conical: 1 } },
     { key: "T0", label: "T\u2080 (hypex)", unit: "", min: 0.4, max: 1.2, step: 0.01, sect: "core", fams: LAW_FAMILIES },
@@ -4073,6 +4236,11 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     // entry 94: the throat SHAPE select renders directly ABOVE the throat dimension
     // params (shape first, then size); rectangle replaces round entirely (throatD
     // hides and rt derives from sqrt(W*H/pi)); the pure-square option is gone.
+    // entry 112: restore the autosaved design (silent; presets still reset)
+    try {
+      var as9 = JSON.parse(localStorage.getItem("hs_design_autosave") || "null");
+      if (as9 && as9.hsDesign === 1 && as9.state) for (var ak9 in as9.state) if (Object.prototype.hasOwnProperty.call(S, ak9)) S[ak9] = as9.state[ak9];
+    } catch (e1) {}
     var throatSelHTML = '<select class="psel" id="throatSel" aria-label="Throat shape">' +
       [["round", "Throat: round"], ["rect", "Throat: rectangle W \u00d7 H"]].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === S.throatShape ? " selected" : "") + '>' + o[1] + "</option>"; }).join("") + '</select>';
     var lipSelHTML = '<select class="psel" id="lipSel" aria-label="Mouth lip style">' +
@@ -4099,7 +4267,10 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     }
     side += '<div class="sect">EXPORT</div>' +
       '<button class="btn" id="exCsv">PROFILE CSV (H + V)</button>' +
+      '<select class="psel" id="bemFSel" aria-label="BEM mesh density" style="margin-bottom:4px">' +
+      [["20000", "BEM mesh: \u03bb/6 to 20 kHz (fast sims)"], ["40000", "BEM mesh: \u03bb/6 to 40 kHz"], ["90000", "BEM mesh: \u03bb/6 to 90 kHz (finest)"]].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === String(S.bemF || 20000) ? " selected" : "") + '>' + o[1] + "</option>"; }).join("") + '</select>' +
       '<button class="btn" id="exAkabak" style="border-color:var(--ink)">AKABAK BEM MESH (.msh)</button>' +
+      '<button class="btn" id="exNurbs">STEP (NURBS SURFACE)</button>' +
       '<button class="btn" id="exStl">STL SOLID + ROUNDOVER</button>' +
       '<button class="btn" id="exShell" style="display:none">WATERTIGHT SHELL STL</button>' +
       '<button class="btn" id="exStep">STEP (FACETED)</button>' +
@@ -4116,7 +4287,11 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       '<div><div class="k">METHOD</div><div class="v" id="tbFam">JMLC</div></div>' +
       '<div><div class="k">LOADING</div><div class="v">WEBSTER</div></div>' +
       '<div><div class="k">UNITS</div><div class="v">mm / Hz</div></div></div></header>' +
-      '<div class="cols"><aside>' + side + '</aside>' +
+      '<div class="cols"><aside>' +
+      '<div style="display:flex;gap:6px;margin-bottom:10px">' +
+      '<button class="btn" id="saveDesign" style="margin:0;flex:1">SAVE DESIGN</button>' +
+      '<button class="btn" id="loadDesign" style="margin:0;flex:1">LOAD</button>' +
+      '<input type="file" id="loadFile" accept=".json" style="display:none"></div>' + side + '</aside>' +
       '<main>' +
       '<div style="padding:12px 16px;border-bottom:1px solid var(--line)"><div class="eyebrow" style="margin-bottom:6px">3-D PREVIEW \u2014 DRAG ROTATE \u00b7 WHEEL ZOOM <button class="btn" id="showConstr" style="display:none;width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">SHOW CONSTRUCTION</button></div>' +
       '<div id="view3d" style="width:100%;height:380px;background:#FFFFFF;touch-action:none;cursor:grab"></div>' +
@@ -4192,6 +4367,28 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     });
     document.getElementById("sectSel").addEventListener("change", function (e) { S.section = e.target.value; scheduleUpdate(); });
     // entry 93 (Marwan: "shouldn't we just do an option of square or round throat... as a toggle")
+    // entry 112: save/load designs (user feedback: "A saving feature would be
+    // nice so we don't loose progress in our tuning!") + silent localStorage
+    // autosave with restore at boot.
+    document.getElementById("saveDesign").addEventListener("click", function () {
+      saveBlob("horn_design_" + (S.family || "horn") + ".json", new Blob([JSON.stringify({ hsDesign: 1, state: S }, null, 1)], { type: "application/json" }));
+    });
+    document.getElementById("loadDesign").addEventListener("click", function () { document.getElementById("loadFile").click(); });
+    document.getElementById("loadFile").addEventListener("change", function (ev) {
+      var f9 = ev.target.files && ev.target.files[0]; if (!f9) return;
+      var rd9 = new FileReader();
+      rd9.onload = function () {
+        try {
+          var dd9 = JSON.parse(rd9.result);
+          if (!dd9 || dd9.hsDesign !== 1 || !dd9.state) throw new Error("not a design file");
+          applyDesign(dd9.state);
+        } catch (e9) { var eb9 = document.getElementById("errbox"); if (eb9) eb9.textContent = "Load failed: " + e9.message; }
+      };
+      rd9.readAsText(f9); ev.target.value = "";
+    });
+    document.getElementById("bemFSel").addEventListener("change", function (e) {
+      S.bemF = parseInt(e.target.value, 10);
+    });
     document.getElementById("lipSel").addEventListener("change", function (e) {
       S.lipStyle = e.target.value; update();
     });
@@ -4247,6 +4444,27 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     // 10 kHz under a 90k-element cap), GMSH 2.2 ASCII in MILLIMETRES, physical
     // groups "SourceDisc" (drive these in Akabak) and "HornWalls". Replaces the
     // in-browser NumCalc solver entirely (Marwan 2026-07-14).
+    // entry 112 (user feedback: "the .step file is being inserted into Fusion 360
+    // as a mesh"): ONE bicubic B-spline surface interpolated THROUGH the inner
+    // ring grid -- Fusion imports a real surface (thicken/offset natively).
+    document.getElementById("exNurbs").addEventListener("click", function () {
+      if (!exportGate()) return; if (!lastAct) return;
+      var segsN = 48, ringsN = null, MN = 0;
+      if (S.family === "biradial" && lastAct.fan) { var rN = buildAraiFanRings(lastAct, segsN, 0, 0); ringsN = rN.rings; MN = rN.M; }
+      else if (S.family === "wn" && lastAct.wn) { var rN2 = buildWNRings(lastAct, segsN, 0, 0); ringsN = rN2.rings; MN = rN2.M; }
+      else if (S.family === "iwata") { var rN3 = buildIwataRings(lastAct, segsN, 0, 0); ringsN = rN3.rings; MN = rN3.M; }
+      else {
+        // ~110 stations straight from profOf (the global interpolation solve is
+        // cubic in M; downsampling H/V by hand desyncs the parallel per-station
+        // arrays -- entry 112 lesson)
+        var profN = profOf(lastAct, 110);
+        ringsN = buildRings(profN, segsN); MN = profN.H.length;
+      }
+      var sfN = nurbsLoft(ringsN, MN, segsN);
+      saveBlob(fname("nurbs") + ".step", new Blob([stepFromNurbs(sfN, "horn_inner_surface")], { type: "text/plain" }));
+      var ntN = document.getElementById("v3dnote");
+      if (ntN) ntN.textContent = "NURBS STEP saved: one bicubic B-spline surface (" + MN + "\u00d7" + (segsN + 1) + " interpolated), inner surface only \u2014 thicken in CAD; the faceted STEP remains for direct solids";
+    });
     document.getElementById("exAkabak").addEventListener("click", function () {
       if (!lastAct) return;
       try {
@@ -4256,7 +4474,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
         var perX9 = 2 * Math.PI * Math.sqrt((aM9 * aM9 + bM9 * bM9) / 2);
         var arcOf9 = function (wq) { var s9 = 0; for (var i9 = 1; i9 < wq.length; i9++) { var A9 = wq[i9 - 1], B9 = wq[i9]; s9 += Math.hypot((B9.z !== undefined ? B9.z : B9[0]) - (A9.z !== undefined ? A9.z : A9[0]), (B9.r !== undefined ? B9.r : B9[1]) - (A9.r !== undefined ? A9.r : A9[1])); } return s9; };
         var pathX9 = Math.max(arcOf9(prof9.H), arcOf9(prof9.V)) || lastAct.axialDepth || 200;
-        var sz9 = bemBandSize(perX9, pathX9, 10000, 90000);
+        var sz9 = bemBandSize(perX9, pathX9, 10000, (S.bemF || 20000) === 20000 ? 6000 : ((S.bemF || 20000) === 40000 ? 24000 : 90000));   // entry 112: user-selected density (element budget scales ~f^2); default 20 kHz = fast overnight-free sims
         var rings9 = null;
         if (S.family === "biradial" && lastAct.fan) rings9 = buildAraiFanRings(lastAct, sz9.segs, 0, 0);
         else if (S.family === "wn" && lastAct.wn) rings9 = buildWNRings(lastAct, sz9.segs, 0, 0);
@@ -4474,7 +4692,24 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       osc: '<math display="block"><mrow><mi>r</mi><mo>(</mo><mi>z</mi><mo>)</mo><mo>=</mo><msqrt><mrow><msubsup><mi>r</mi><mi>t</mi><mn>2</mn></msubsup><mo>+</mo><msup><mi>z</mi><mn>2</mn></msup><msup><mi>tan</mi><mn>2</mn></msup><mi>&#x3B8;</mi></mrow></msqrt><mspace width="0.6em"/><mtext>Geddes 1989, per axis when elliptical</mtext></mrow></math>',
       rosse: '<math display="block"><mrow><mtext>published R-OSSE parametric (R, a, a</mtext><msub><mrow/><mn>0</mn></msub><mtext>, k, r, b, m, q) with rollback termination</mtext></mrow></math>'
     };
+  function applyDesign(st9) {
+    // entry 112: merge ONLY known keys (stale files can't inject junk), sync
+    // every control silently (no dispatch -- family defaults must not clobber
+    // the loaded values), then one update().
+    for (var k9 in st9) if (Object.prototype.hasOwnProperty.call(S, k9)) S[k9] = st9[k9];
+    var fs9 = document.getElementById("familySel"); if (fs9) fs9.value = S.family;
+    [["throatSel", "throatShape"], ["lipSel", "lipStyle"], ["sectSel", "section"], ["finsSel", "fins"], ["petfSel", "petfPreset"], ["bemFSel", "bemF"]].forEach(function (p9) {
+      var el9 = document.getElementById(p9[0]); if (el9 && S[p9[1]] !== undefined) el9.value = String(S[p9[1]]);
+    });
+    for (var i9 = 0; i9 < PARAMS.length; i9++) {
+      var kk9 = PARAMS[i9].key, n9 = document.getElementById("num_" + kk9), r9 = document.getElementById("rng_" + kk9);
+      if (n9 && S[kk9] !== undefined) n9.value = S[kk9];
+      if (r9 && S[kk9] !== undefined) r9.value = S[kk9];
+    }
+    update();
+  }
   function update() {
+    try { localStorage.setItem("hs_design_autosave", JSON.stringify({ hsDesign: 1, state: S })); } catch (e0) {}
     var _vv = validateInputs();
     var _eb0 = document.getElementById("errbox");
     if (_eb0) { _eb0.style.display = "none"; _eb0.textContent = ""; }   // clear stale warnings; validators below re-show as needed
