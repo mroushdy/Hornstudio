@@ -3660,7 +3660,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
 
   /* ================= state ================= */
   var S = {
-    family: "jmlc", fc: 400, throatD: 35.56, entryDeg: 0, T0: 0.7, trunc: 175, aplat: 4, ellMu: 0.88, ellSigma: 0.53, decoupeN: 0.3, decoupeP: 11, throatShape: "round", lipStyle: "round", bemF: 20000, ribW: 0, ribH: 0, ribL: 0, exitLen: 0, exitDeg: 10, plateT: 0, plateD: 0, boltN: 0, boltCircleD: 0, boltHoleD: 0, boltRot: 0,
+    family: "jmlc", fc: 400, throatD: 35.56, entryDeg: 0, T0: 0.7, trunc: 175, aplat: 4, ellMu: 0.88, ellSigma: 0.53, decoupeN: 0.3, decoupeP: 11, throatShape: "round", lipStyle: "round", bemF: 20000, bemSym: "full", ribW: 0, ribH: 0, ribL: 0, exitLen: 0, exitDeg: 10, plateT: 0, plateD: 0, boltN: 0, boltCircleD: 0, boltHoleD: 0, boltRot: 0,
     petf: false, petfPreset: "off", petfShape: "exp", petfRef: "throat", Tadd: 3.5, fmult: 3, sOff: 0,
     fins: "off", shell: "uniform", finT: 10, adaptL: 25, wnUL: 0.5, wnUC: 0.68, showConstr: false, wnFins: 0, wnFinT: 1.0, wnClear: 0.4, wnFinU1: 0.7,
     aspect: 1.0, section: "ellipse", cornerR: 60, covH: 90, covV: 40, f0: 800, osK: 1.0, osS: 0.7, osN: 4, seN: 2.5, spProj: "flat", f0V: 0, TaddV: 0.4, fmultV: 2, rosR: 130, rosA: 39, rosA0: 7.5, rosK: 1.8, rosRr: 0.3, rosB: 0.3, rosM: 0.8, rosQ: 3.7, flareR: 20, flareWrap: 0, thick: 5
@@ -4267,6 +4267,8 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     }
     side += '<div class="sect">EXPORT</div>' +
       '<button class="btn" id="exCsv">PROFILE CSV (H + V)</button>' +
+      '<select class="psel" id="bemSymSel" aria-label="BEM symmetry" style="margin-bottom:4px">' +
+      [["full", "BEM: full mesh (no symmetry)"], ["quarter", "BEM: quarter mesh (2 symmetry planes, ~4\u00d7 fewer elements, much faster solves)"]].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === (S.bemSym || "full") ? " selected" : "") + '>' + o[1] + "</option>"; }).join("") + '</select>' +
       '<select class="psel" id="bemFSel" aria-label="BEM mesh density" style="margin-bottom:4px">' +
       [["20000", "BEM mesh: \u03bb/6 to 20 kHz (fast sims)"], ["40000", "BEM mesh: \u03bb/6 to 40 kHz"], ["90000", "BEM mesh: \u03bb/6 to 90 kHz (finest)"]].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === String(S.bemF || 20000) ? " selected" : "") + '>' + o[1] + "</option>"; }).join("") + '</select>' +
       '<button class="btn" id="exAkabak" style="border-color:var(--ink)">AKABAK BEM MESH (.msh)</button>' +
@@ -4389,6 +4391,9 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     document.getElementById("bemFSel").addEventListener("change", function (e) {
       S.bemF = parseInt(e.target.value, 10);
     });
+    document.getElementById("bemSymSel").addEventListener("change", function (e) {
+      S.bemSym = e.target.value;
+    });
     document.getElementById("lipSel").addEventListener("change", function (e) {
       S.lipStyle = e.target.value; update();
     });
@@ -4474,15 +4479,17 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
         var perX9 = 2 * Math.PI * Math.sqrt((aM9 * aM9 + bM9 * bM9) / 2);
         var arcOf9 = function (wq) { var s9 = 0; for (var i9 = 1; i9 < wq.length; i9++) { var A9 = wq[i9 - 1], B9 = wq[i9]; s9 += Math.hypot((B9.z !== undefined ? B9.z : B9[0]) - (A9.z !== undefined ? A9.z : A9[0]), (B9.r !== undefined ? B9.r : B9[1]) - (A9.r !== undefined ? A9.r : A9[1])); } return s9; };
         var pathX9 = Math.max(arcOf9(prof9.H), arcOf9(prof9.V)) || lastAct.axialDepth || 200;
-        var sz9 = bemBandSize(perX9, pathX9, 10000, (S.bemF || 20000) === 20000 ? 6000 : ((S.bemF || 20000) === 40000 ? 24000 : 90000));   // entry 112: user-selected density (element budget scales ~f^2); default 20 kHz = fast overnight-free sims
+        var bud9 = (S.bemF || 20000) === 20000 ? 8000 : ((S.bemF || 20000) === 40000 ? 30000 : 120000);
+        var sz9 = bemBandSize(perX9, pathX9, (S.bemF || 20000), bud9);   // entry 114: honest lambda/6 TARGET + a sane per-tier element budget; big horns cap and the note reports the TRUE achieved lambda/6 ceiling
         var rings9 = null;
         if (S.family === "biradial" && lastAct.fan) rings9 = buildAraiFanRings(lastAct, sz9.segs, 0, 0);
         else if (S.family === "wn" && lastAct.wn) rings9 = buildWNRings(lastAct, sz9.segs, 0, 0);
         var finM9 = (S.family === "wn" && S.wnFins > 0 && lastAct.wn) ? wnFinMesh(lastAct, S.wnFinT, S.wnClear, 0.03, S.wnFinU1) : null;
-        var bp9 = buildBEMProject(lastAct, prof9, rings9, { stations: sz9.stations, segs: sz9.segs, targetEdge: sz9.targetEdge, finMeshes: finM9 });
+        var symReq9 = (S.bemSym === "quarter") && !rings9 && !(finM9 && finM9.length);   // entry 114: native entry-78 quarter (rings families and fins ineligible)
+        var bp9 = buildBEMProject(lastAct, prof9, rings9, { stations: sz9.stations, segs: sz9.segs, targetEdge: sz9.targetEdge, finMeshes: finM9, symmetry: symReq9 ? "quarter" : undefined });
         saveBlob(fname("akabak_bem") + ".msh", new Blob([bemToMsh(bp9)], { type: "text/plain" }));   // entry 90: the ribbon throat is GEOMETRY now -- the SourceDisc group IS the rectangular throat face
         var nt9 = document.getElementById("v3dnote");
-        if (nt9) nt9.textContent = ((S.ribW > 0 && S.ribH > 0 && S.family !== "wn" && S.family !== "biradial") ? "RIBBON THROAT " + S.ribW + "\u00d7" + S.ribH + " mm (SourceDisc = the rectangular face) \u00b7 " : "") + "AKABAK mesh saved: " + bp9.nBnd + " elements \u00b7 \u03bb/6 honest to " + Math.round(bp9.fMax) + " Hz \u00b7 mm units \u00b7 GMSH 2.2 \u00b7 drive the \"SourceDisc\" group (import: Project > Import Mesh File, scale mm)";
+        if (nt9) nt9.textContent = ((S.ribW > 0 && S.ribH > 0 && S.family !== "wn" && S.family !== "biradial") ? "RIBBON THROAT " + S.ribW + "\u00d7" + S.ribH + " mm (SourceDisc = the rectangular face) \u00b7 " : "") + "AKABAK mesh saved: " + bp9.nBnd + " elements" + (bp9.sym === 2 ? " (QUARTER model -- enable BOTH symmetry planes in the solver; the cut planes pass through the horn axis)" : "") + " \u00b7 \u03bb/6 honest to " + Math.round(bp9.fMax) + " Hz \u00b7 mm units \u00b7 GMSH 2.2 \u00b7 drive the \"SourceDisc\" group (import: Project > Import Mesh File, scale mm)";
       } catch (e9) { var nt8 = document.getElementById("v3dnote"); if (nt8) nt8.textContent = "AKABAK export failed: " + e9; }
     });
     // entry 89 + 95 (forum): INTERACTIVE GRAPHS -- the drawing AND every SVG chart.
