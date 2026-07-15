@@ -2971,13 +2971,252 @@ function hornResponse(prof, fArr, coordMode, sMap) {
     // Flat above cutoff, mouth-reflection ripple near fc, mass-controlled collapse
     // below -- the classic loading view. (Raw on-axis would additionally rise ~6dB/oct
     // from piston beaming; directivity is charted separately.)
-    out.push({ f: f, mag: Math.sqrt(Um2 * ZL) });
+    out.push({ f: f, mag: Math.sqrt(Um2 * ZL), ph: -Math.atan2(dim, dre) });   // entry 143: transfer phase kept (bLab plots impedance phase; ours feeds GROUP DELAY)
   }
   // dB relative to the passband (1-10 kHz median)
   var top = out.filter(function (o9) { return o9.f >= 1000 && o9.f <= 10000; }).map(function (o9) { return o9.mag; }).sort(function (a9, b9) { return a9 - b9; });
   var ref = top.length ? top[top.length >> 1] : out[out.length - 1].mag;
   for (i = 0; i < out.length; i++) out[i].db = 20 * Math.log10(Math.max(1e-12, out[i].mag / ref));
   return out;
+}
+// entry 132 (Marwan: "lets make the best meshing tool that can work with both
+// Akabak and boundary lab"): GRADED WALL ASSEMBLY. Every station gets its own
+// azimuthal count tracking its local perimeter (full-circle convention, %4,
+// ratio-limited 2:1 between neighbors), sections and outer offsets sampled
+// per distinct count through the VALIDATED buildRings + bemOuterOffset
+// pipeline, bands stitched by a midpoint-rule zipper (monotone, cannot
+// cross, balanced seams -- the entry-129b hub-fan fix). Discs grade from the
+// small throat rims. Measured design target: 2.21x fewer elements at
+// identical quality (roadmap sec. 1), meshio/GMSH compatible for both
+// AKABAK and Boundary Lab.
+// entry 141 (Marwan: "Lets fix it for all families and all future families"):
+// the assembly is now GEOMETRY-SOURCE-AGNOSTIC. The single contract a family
+// must provide: ringsKept(n) -> Float32Array(M*n*3) of the KEPT stations
+// sampled at any azimuthal count n (%4). Everything else -- per-station
+// perimeters, arc positions, cap slope -- is measured from the grids
+// themselves. Implement ringsKept and a family gets graded counts, the cap
+// source, quality stats, and the NaN gates for free.
+function bemGradedWallAssembly(ringsKept, M, segs, thick, symQ, mode) {
+  // entry 134 (research: Ath Source.Radius spherical cap, auto = wavefront
+  // perpendicular to the walls; ABEC SimType 1 = Infinite Baffle):
+  // mode.srcCap -- dome the source disc as a spherical cap through the throat
+  //   rim, radius R = r_throat / sin(theta_wall) so the cap meets the walls at
+  //   90 deg (the physical exit-wavefront assumption); near-zero wall angle
+  //   degrades gracefully to flat.
+  // mode.baffle -- INFINITE-BAFFLE model: source disc + inner walls only,
+  //   open rim for mounting on the solver's baffle plane; no outer shell,
+  //   flange, or back disc; orientation set explicitly (no volume test on an
+  //   open surface).
+  mode = mode || {};
+  var i, j, k;
+  // probe grid: measured per-station perimeter + arc positions + throat slope
+  var PN = 64, probe = ringsKept(PN);
+  var perArr = [], ctr = [];
+  for (i = 0; i < M; i++) {
+    var pSum = 0, cz = 0, cr = 0;
+    for (j = 0; j < PN; j++) {
+      var a3 = (i * PN + j) * 3, b3 = (i * PN + ((j + 1) % PN)) * 3;
+      pSum += Math.hypot(probe[b3] - probe[a3], probe[b3 + 1] - probe[a3 + 1], probe[b3 + 2] - probe[a3 + 2]);
+      cz += probe[a3]; cr += Math.hypot(probe[a3 + 1], probe[a3 + 2]);
+    }
+    perArr.push(pSum); ctr.push({ z: cz / PN, r: cr / PN });
+  }
+  var eEff = Math.max(0.5, perArr[M - 1] / segs);   // achieved mouth element width
+  function snap4(x) { return 4 * Math.round(x / 4); }
+  // entry 138 (Ath practice, from their configs: ThroatResolution ~2x finer
+  // than MouthResolution -- the source region carries the velocity BC that
+  // drives the whole solve): the target edge tightens toward the throat with
+  // the Mesh2HRTF cosine ramp, x0.55 at the throat -> x1.0 from 30% of the
+  // arc onward. Costs ~10% elements, doubles source-region resolution.
+  var arcCum = [0];
+  for (i = 1; i < M; i++) arcCum.push(arcCum[i - 1] + Math.hypot(ctr[i].z - ctr[i - 1].z, ctr[i].r - ctr[i - 1].r));
+  var arcTot = arcCum[M - 1] || 1;
+  function eLoc(i9) {
+    var d9 = Math.min(1, (arcCum[i9] / arcTot) / 0.3);
+    var g9 = 0.5 - 0.5 * Math.cos(Math.PI * d9);   // smooth 0 -> 1
+    return eEff * (0.55 + 0.45 * g9);
+  }
+  var nArr = [];
+  for (i = 0; i < M; i++) nArr.push(Math.min(segs, Math.max(16, snap4(perArr[i] / eLoc(i)))));
+  nArr[M - 1] = segs;
+  function ceil4(x) { return 4 * Math.ceil(x / 4); }
+  for (i = M - 2; i >= 0; i--) nArr[i] = Math.min(segs, Math.max(nArr[i], ceil4(nArr[i + 1] / 2)));
+  for (i = 1; i < M; i++) nArr[i] = Math.min(segs, Math.max(nArr[i], ceil4(nArr[i - 1] / 2)));
+  // section + outer grids per DISTINCT count, via the validated pipeline
+  var grids = {};
+  for (i = 0; i < M; i++) if (!grids[nArr[i]]) {
+    var nG = nArr[i], innF = ringsKept(nG), PTSn = nG, innU = innF;
+    if (symQ) {
+      PTSn = nG / 4 + 1;
+      innU = new Float32Array(M * PTSn * 3);
+      for (var a2 = 0; a2 < M; a2++) for (var b2 = 0; b2 < PTSn; b2++) {
+        var sS = (a2 * nG + b2) * 3, sD = (a2 * PTSn + b2) * 3;
+        innU[sD] = innF[sS]; innU[sD + 1] = innF[sS + 1]; innU[sD + 2] = innF[sS + 2];
+      }
+    }
+    grids[nG] = { inn: innU, out: bemOuterOffset(innU, M, PTSn, thick, symQ), PTSn: PTSn };
+  }
+  function rowN(i9) { return symQ ? nArr[i9] / 4 + 1 : nArr[i9]; }
+  // ---- node layout: [inner rows][outer rows][cSrc][cBack][srcDiscRings][backDiscRings][flangeRings]
+  var innOff = [0], outOffBase, nodesA = [];
+  for (i = 0; i < M; i++) innOff.push(innOff[i] + rowN(i));
+  outOffBase = innOff[M];
+  function pushRow(grid, i9) {
+    var PTSn9 = grid.PTSn === undefined ? 0 : grid.PTSn;
+    for (var j9 = 0; j9 < rowN(i9); j9++) {
+      var s9 = (i9 * grids[nArr[i9]].PTSn + j9) * 3;
+      nodesA.push(grid[s9], grid[s9 + 1], grid[s9 + 2]);
+    }
+  }
+  for (i = 0; i < M; i++) pushRow(grids[nArr[i]].inn, i);
+  if (!mode.baffle) for (i = 0; i < M; i++) pushRow(grids[nArr[i]].out, i);
+  function INg(i9, j9) { var n9 = nArr[i9]; return innOff[i9] + (symQ ? Math.min(j9, n9 / 4) : ((j9 % n9 + n9) % n9)); }
+  function OUTg(i9, j9) { var n9 = nArr[i9]; return outOffBase + innOff[i9] + (symQ ? Math.min(j9, n9 / 4) : ((j9 % n9 + n9) % n9)); }
+  var cSrc = nodesA.length / 3;
+  var z0m = 0; for (j = 0; j < rowN(0); j++) z0m += nodesA[INg(0, j) * 3];
+  nodesA.push(z0m / rowN(0), 0, 0);
+  var cBack = -1;
+  if (!mode.baffle) {
+    cBack = nodesA.length / 3;
+    var zbm = 0; for (j = 0; j < rowN(0); j++) zbm += nodesA[OUTg(0, j) * 3];
+    nodesA.push(zbm / rowN(0), 0, 0);
+  }
+  // entry 134: spherical-cap source geometry (applied to source-disc interior
+  // nodes only; the rim stays put -- watertight, grading intact)
+  var capR = 0, capRim = 0, capZ0 = 0;
+  if (mode.srcCap) {
+    var dr0 = ctr[1].r - ctr[0].r, dz0 = ctr[1].z - ctr[0].z;
+    var sinT = dr0 / Math.max(1e-9, Math.hypot(dr0, dz0));
+    var rr0 = 0; for (j = 0; j < rowN(0); j++) rr0 += Math.hypot(nodesA[INg(0, j) * 3 + 1], nodesA[INg(0, j) * 3 + 2]);
+    capRim = rr0 / rowN(0); capZ0 = nodesA[cSrc * 3];
+    if (sinT > 0.02) capR = capRim / sinT;   // wavefront perpendicular to the walls; tiny angle => flat
+  }
+  function capLift(r9) {
+    if (!capR || r9 >= capRim) return 0;
+    return Math.sqrt(Math.max(0, capR * capR - r9 * r9)) - Math.sqrt(Math.max(0, capR * capR - capRim * capRim));
+  }
+  if (capR) nodesA[cSrc * 3] = capZ0 + capLift(0);   // apex
+  // ---- graded disc rings (full-count convention; rims are the wall/shell ring 0)
+  function discPlan(rimIdxFn, rimN, cI, eDisc) {
+    eDisc = eDisc || eEff;
+    var rr = 0; for (var jr = 0; jr < (symQ ? rimN / 4 + 1 : rimN); jr++) rr += Math.hypot(nodesA[rimIdxFn(jr) * 3 + 1], nodesA[rimIdxFn(jr) * 3 + 2]);
+    rr /= (symQ ? rimN / 4 + 1 : rimN);
+    var nR = Math.min(32, Math.max(1, Math.ceil(rr / eDisc)));
+    var counts = [], t9;
+    for (t9 = 1; t9 <= nR; t9++) counts.push(Math.min(rimN, Math.max(8, snap4(2 * Math.PI * (rr * t9 / nR) / eDisc))));
+    counts[nR - 1] = rimN;
+    for (t9 = nR - 2; t9 >= 0; t9--) counts[t9] = Math.min(counts[t9], counts[t9 + 1]);
+    // interior ring nodes: sample the rim row at fraction f, lerp toward the center
+    var off9 = [], base9 = nodesA.length / 3;
+    for (t9 = 1; t9 < nR; t9++) {
+      off9.push(nodesA.length / 3);
+      var n9 = counts[t9 - 1], rowC = symQ ? n9 / 4 + 1 : n9, frT = t9 / nR;
+      for (var j9 = 0; j9 < rowC; j9++) {
+        var u9 = j9 * rimN / n9;   // full-index units on the rim row
+        var i0 = Math.floor(u9), ff = u9 - i0;
+        var iA = rimIdxFn(symQ ? Math.min(i0, rimN / 4) : (i0 % rimN)) * 3;
+        var iB = rimIdxFn(symQ ? Math.min(i0 + 1, rimN / 4) : ((i0 + 1) % rimN)) * 3;
+        var rx = nodesA[iA] + (nodesA[iB] - nodesA[iA]) * ff;
+        var ry = nodesA[iA + 1] + (nodesA[iB + 1] - nodesA[iA + 1]) * ff;
+        var rz = nodesA[iA + 2] + (nodesA[iB + 2] - nodesA[iA + 2]) * ff;
+        var px9 = nodesA[cI * 3 + 1] + (ry - nodesA[cI * 3 + 1]) * frT, py9 = nodesA[cI * 3 + 2] + (rz - nodesA[cI * 3 + 2]) * frT;
+        var pz9 = nodesA[cI * 3] + (rx - nodesA[cI * 3]) * frT;
+        if (cI === cSrc && capR) pz9 = capZ0 + capLift(Math.hypot(px9, py9));   // entry 134: dome the cap
+        nodesA.push(pz9, px9, py9);
+      }
+    }
+    return { counts: counts, off: off9, nR: nR };
+  }
+  var tris = [];
+  // midpoint-rule zipper between ring A (count nA, idx fnA) and ring B (count nB, fnB)
+  // winding matches the legacy strip: advance-B -> [A, B_k, B_k+1]; advance-A -> [A_j, B_k, A_j+1]
+  function zipRings(fnA, nA, fnB, nB, flip) {
+    var limA = symQ ? nA / 4 : nA, limB = symQ ? nB / 4 : nB;
+    var iA9 = 0, iB9 = 0;
+    function emit(a9, b9, c9) { if (flip) tris.push([a9, c9, b9]); else tris.push([a9, b9, c9]); }
+    while (iA9 < limA || iB9 < limB) {
+      var mA = (iA9 + 0.5) / nA, mB = (iB9 + 0.5) / nB;   // midpoint parameters
+      var advB = (iA9 >= limA) || (iB9 < limB && mB <= mA + 1e-12);
+      if (advB) { emit(fnA(Math.min(iA9, limA)), fnB(iB9), fnB(iB9 + 1)); iB9++; }
+      else { emit(fnA(iA9), fnB(Math.min(iB9, limB)), fnA(iA9 + 1)); iA9++; }
+    }
+  }
+  function discTris(plan, rimIdxFn, rimN, cI, flip) {
+    var c0 = tris.length;
+    function ringFn(t9) {
+      if (t9 >= plan.nR) return { fn: rimIdxFn, n: rimN };
+      var n9 = plan.counts[t9 - 1], off9 = plan.off[t9 - 1];
+      return { fn: function (j9) { return off9 + (symQ ? Math.min(j9, n9 / 4) : ((j9 % n9 + n9) % n9)); }, n: n9 };
+    }
+    var r1 = ringFn(1), lim1 = symQ ? r1.n / 4 : r1.n;
+    for (var jH = 0; jH < lim1; jH++) { if (flip) tris.push([cI, r1.fn(jH + 1), r1.fn(jH)]); else tris.push([cI, r1.fn(jH), r1.fn(jH + 1)]); }
+    for (var tG = 1; tG < plan.nR; tG++) {
+      var rI = ringFn(tG), rO = ringFn(tG + 1);
+      zipRings(rI.fn, rI.n, rO.fn, rO.n, flip);
+    }
+    return tris.length - c0;
+  }
+  // 1) SOURCE disc first (bemToMsh groups elements [0, nSrc) as SourceDisc)
+  var planS = discPlan(function (j9) { return INg(0, j9); }, nArr[0], cSrc, eLoc(0));   // entry 138: source disc at throat resolution
+  var nSrc = discTris(planS, function (j9) { return INg(0, j9); }, nArr[0], cSrc, false);
+  // 2) channel walls
+  for (i = 0; i < M - 1; i++) zipRings(function (j9) { return INg(i, j9); }, nArr[i], (function (i9) { return function (j9) { return INg(i9, j9); }; })(i + 1), nArr[i + 1], false);
+  if (!mode.baffle) {
+    // 3) mouth flange (equal counts, single band)
+    zipRings(function (j9) { return INg(M - 1, j9); }, nArr[M - 1], function (j9) { return OUTg(M - 1, j9); }, nArr[M - 1], false);
+    // 4) outer shell (reversed)
+    for (i = 0; i < M - 1; i++) zipRings(function (j9) { return OUTg(i, j9); }, nArr[i], (function (i9) { return function (j9) { return OUTg(i9, j9); }; })(i + 1), nArr[i + 1], true);
+    // 5) back disc (reversed)
+    var planB = discPlan(function (j9) { return OUTg(0, j9); }, nArr[0], cBack);
+    discTris(planB, function (j9) { return OUTg(0, j9); }, nArr[0], cBack, true);
+  }
+  // rim planarity (baffle-mounting guidance): axial span of the open mouth rim
+  var rimZmin = 1e18, rimZmax = -1e18;
+  for (j = 0; j < rowN(M - 1); j++) {
+    var zr9 = nodesA[INg(M - 1, j) * 3];
+    if (zr9 < rimZmin) rimZmin = zr9; if (zr9 > rimZmax) rimZmax = zr9;
+  }
+  return { nodes: Float64Array.from(nodesA), tris: tris, nSrc: nSrc, NV: nodesA.length / 3, nArr: nArr,
+           open: mode.baffle ? 1 : 0, rimSpan: rimZmax - rimZmin, capDepth: capR ? capLift(0) : 0 };
+}
+// entry 132: the entry-78 continuity-anchored vertex-normal offset, extracted
+// verbatim so the legacy and graded assemblies share one implementation.
+function bemOuterOffset(inner, M, PTS, thick, symQ) {
+  var outer = new Float32Array(M * PTS * 3);
+  var prevN = new Float32Array(PTS * 3);
+  for (var i = 0; i < M; i++)
+    for (var j = 0; j < PTS; j++) {
+      var k0 = (i * PTS + j) * 3;
+      var ip = Math.max(0, i - 1) * PTS + j, iq = Math.min(M - 1, i + 1) * PTS + j;
+      var jpz, jpx, jpy, jqz, jqx, jqy;
+      if (symQ && j === 0) {
+        var mq0 = (i * PTS + 1) * 3;
+        jpz = inner[mq0]; jpx = inner[mq0 + 1]; jpy = -inner[mq0 + 2];
+        jqz = inner[mq0]; jqx = inner[mq0 + 1]; jqy = inner[mq0 + 2];
+      } else if (symQ && j === PTS - 1) {
+        var mq1 = (i * PTS + PTS - 2) * 3;
+        jpz = inner[mq1]; jpx = inner[mq1 + 1]; jpy = inner[mq1 + 2];
+        jqz = inner[mq1]; jqx = -inner[mq1 + 1]; jqy = inner[mq1 + 2];
+      } else {
+        var jp = i * PTS + ((j - 1 + PTS) % PTS), jq = i * PTS + ((j + 1) % PTS);
+        jpz = inner[jp * 3]; jpx = inner[jp * 3 + 1]; jpy = inner[jp * 3 + 2];
+        jqz = inner[jq * 3]; jqx = inner[jq * 3 + 1]; jqy = inner[jq * 3 + 2];
+      }
+      var tix = inner[iq * 3] - inner[ip * 3], tiy = inner[iq * 3 + 1] - inner[ip * 3 + 1], tiz = inner[iq * 3 + 2] - inner[ip * 3 + 2];
+      var tjx = jqz - jpz, tjy = jqx - jpx, tjz = jqy - jpy;
+      var nx = tjy * tiz - tjz * tiy, ny = tjz * tix - tjx * tiz, nz = tjx * tiy - tjy * tix;
+      var nl = Math.hypot(nx, ny, nz) || 1e-12;
+      if (i === 0) {
+        if (ny * inner[k0 + 1] + nz * inner[k0 + 2] < 0) { nx = -nx; ny = -ny; nz = -nz; }
+      } else {
+        if (nx * prevN[j * 3] + ny * prevN[j * 3 + 1] + nz * prevN[j * 3 + 2] < 0) { nx = -nx; ny = -ny; nz = -nz; }
+      }
+      prevN[j * 3] = nx / nl; prevN[j * 3 + 1] = ny / nl; prevN[j * 3 + 2] = nz / nl;
+      outer[k0] = inner[k0] + thick * nx / nl;
+      outer[k0 + 1] = inner[k0 + 1] + thick * ny / nl;
+      outer[k0 + 2] = inner[k0 + 2] + thick * nz / nl;
+    }
+  return outer;
 }
 function buildBEMProject(horn, prof, ringsOv, opts) {
   // ONE-BUTTON BEM (2026-07-13, v2): the surface is CONSTRUCTED explicitly, source
@@ -2999,6 +3238,23 @@ function buildBEMProject(horn, prof, ringsOv, opts) {
   // must be a two-plane-symmetric section family (prof branch), no rings-path bodies
   // (WN wrapped mouths / Arai fans are cut-unsafe in v1), no floating fin solids.
   var symQ = opts.symmetry === "quarter";
+  // entry 136 (user: ".msh file exports are invalid now with some rows
+  // containing NaN"): HARD GATE -- reject non-finite geometry up front with a
+  // clear error instead of propagating NaN into the exported file.
+  if (ringsOv && ringsOv.rings) {   // entry 141: the rings path needs the same gate (biradial with bad params silently builds a NaN grid)
+    for (var gR = 0; gR < ringsOv.rings.length; gR += 97) {   // stride sample: cheap, catches whole-row NaN
+      if (!isFinite(ringsOv.rings[gR]))
+        throw new Error("BEM export aborted: non-finite ring geometry -- check the parameters (this family may need different settings)");
+    }
+  }
+  if (prof && prof.H) for (var gG = 0; gG < prof.H.length; gG++) {
+    var gH = prof.H[gG], gV = prof.V[gG];
+    var gz = gH.z !== undefined ? gH.z : gH[0], gr = gH.r !== undefined ? gH.r : gH[1];
+    var gvr = gV ? (gV.r !== undefined ? gV.r : gV[1]) : 0;
+    if (!isFinite(gz) || !isFinite(gr) || !isFinite(gvr))
+      throw new Error("BEM export aborted: non-finite profile geometry at station " + gG + " -- check the parameters (this family may need different settings)");
+  }
+  var gradedW = null;   // entry 132: graded wall assembly (budgeted prof path)
   if (symQ && ringsOv) throw new Error("symmetry quarter: rings-path families (WN/biradial) are not eligible");
   if (symQ && opts.finMeshes && opts.finMeshes.length) throw new Error("symmetry quarter: fins are not eligible");
   if (symQ && segs % 4) throw new Error("symmetry quarter needs segs % 4 === 0");
@@ -3007,6 +3263,11 @@ function buildBEMProject(horn, prof, ringsOv, opts) {
     // buildAraiFanRings returns {rings, M} with segs implied by the caller; buildWNRings
     // includes segs. Fall back to opts.segs (0 elements were built when this was missing).
     var M0 = ringsOv.M, sg0 = ringsOv.segs || segs, keep = [];
+    var gMouthPer = 0;   // entry 141: measured mouth-ring perimeter (any section shape)
+    for (var gmp = 0; gmp < sg0; gmp++) {
+      var gA9 = ((M0 - 1) * sg0 + gmp) * 3, gB9 = ((M0 - 1) * sg0 + ((gmp + 1) % sg0)) * 3;
+      gMouthPer += Math.hypot(ringsOv.rings[gB9] - ringsOv.rings[gA9], ringsOv.rings[gB9 + 1] - ringsOv.rings[gA9 + 1], ringsOv.rings[gB9 + 2] - ringsOv.rings[gA9 + 2]);
+    }
     nSta = Math.min(nSta, M0);   // entry 77: stations > source rings duplicate keep[] -> degenerate quads
     // entry 77: ADAPTIVE subsampling. Uniform-index keep[] let kept-pair 3-D gaps
     // blow out where rings bunch/whip (WN curved mouths hit ~15 mm regardless of
@@ -3035,11 +3296,41 @@ function buildBEMProject(horn, prof, ringsOv, opts) {
       }
       var gRm = 0;   // entry 127: mean ring radius -> local element width
       for (var g4 = 0; g4 < sg0; g4++) { var gk4 = (g1 * sg0 + g4) * 3; gRm += Math.hypot(ringsOv.rings[gk4 + 1], ringsOv.rings[gk4 + 2]); }
-      var gW = opts.budget ? Math.max(0.5, 2 * Math.PI * (gRm / sg0) / segs) : 1;   // entry 127c
+      // entry 141: with GRADED counts the local width is ~constant (mouth
+      // perimeter / segs) -- uniform-arc stations, same as the prof path.
+      var gW = opts.budget ? Math.max(0.5, gMouthPer / sg0) : 1;
       gCum.push(gCum[g1] + (gMx + thick * gTurn) / gW);
     }
     if (opts.budget) nSta = Math.max(12, Math.min(nSta, Math.round(gCum[M0 - 1]) + 1));   // entry 127: budgeted path only
     keep = [];
+    // entry 147: the same sagitta bound for rings families -- station centroids
+    // (mean z, mean radius) give the meridian curvature; spacing capped at
+    // sqrt(8 R tol), tol = gW/12, so wraps and rolls keep geometric fidelity.
+    if (opts.budget) {
+      var gCtr = [];
+      for (var gc = 0; gc < M0; gc++) {
+        var gz9 = 0, gr9 = 0;
+        for (var gj = 0; gj < sg0; gj++) { var gk9 = (gc * sg0 + gj) * 3; gz9 += ringsOv.rings[gk9]; gr9 += Math.hypot(ringsOv.rings[gk9 + 1], ringsOv.rings[gk9 + 2]); }
+        gCtr.push({ z: gz9 / sg0, r: gr9 / sg0 });
+      }
+      var gW9 = Math.max(0.5, gMouthPer / sg0), gCum2 = [0];
+      for (var gg = 1; gg < M0; gg++) {
+        var gGap9 = Math.hypot(gCtr[gg].z - gCtr[gg - 1].z, gCtr[gg].r - gCtr[gg - 1].r);
+        var wLoc = gW9;
+        if (gg > 0 && gg < M0 - 1) {
+          var pA = gCtr[gg - 1], pB = gCtr[gg], pC = gCtr[gg + 1];
+          var dd2 = 2 * ((pB.z - pA.z) * (pC.r - pA.r) - (pB.r - pA.r) * (pC.z - pA.z));
+          if (Math.abs(dd2) > 1e-12) {
+            var u9 = pB.z * pB.z + pB.r * pB.r - pA.z * pA.z - pA.r * pA.r;
+            var v9 = pC.z * pC.z + pC.r * pC.r - pA.z * pA.z - pA.r * pA.r;
+            var cx9 = ((pC.r - pA.r) * u9 - (pB.r - pA.r) * v9) / dd2, cy9 = ((pB.z - pA.z) * v9 - (pC.z - pA.z) * u9) / dd2;
+            wLoc = Math.min(gW9, Math.sqrt(8 * Math.hypot(pB.z - cx9, pB.r - cy9) * (gW9 / 12)));
+          }
+        }
+        gCum2.push(gCum2[gg - 1] + gGap9 / wLoc);
+      }
+      gCum = gCum2;
+    }
     var gTot = gCum[M0 - 1] || 1, gPtr = 0;
     for (var q = 0; q < nSta; q++) {
       var gT = gTot * q / (nSta - 1);
@@ -3049,6 +3340,19 @@ function buildBEMProject(horn, prof, ringsOv, opts) {
     }
     keep[nSta - 1] = M0 - 1;
     segs = sg0; M = nSta;
+    // entry 141: rings families join the graded pipeline. The family supplies
+    // opts.ringsBuilder(n) (full-station ring grid at any azimuthal count %4);
+    // kept stations are subsampled so stations stay consistent across counts.
+    if (opts.budget && opts.ringsBuilder) {
+      var keepR = keep.slice();
+      gradedW = bemGradedWallAssembly(function (nQ) {
+        var fullQ = opts.ringsBuilder(nQ);
+        var outQ = new Float32Array(keepR.length * nQ * 3);
+        for (var kq = 0; kq < keepR.length; kq++)
+          for (var jq = 0; jq < nQ * 3; jq++) outQ[kq * nQ * 3 + jq] = fullQ.rings[keepR[kq] * nQ * 3 + jq];
+        return outQ;
+      }, keepR.length, sg0, thick, symQ, { srcCap: !!opts.srcCap, baffle: false });
+    }
     inner = new Float32Array(M * segs * 3);
     for (var a1 = 0; a1 < M; a1++) inner.set(ringsOv.rings.subarray(keep[a1] * sg0 * 3, (keep[a1] + 1) * sg0 * 3), a1 * segs * 3);
   } else {
@@ -3066,8 +3370,26 @@ function buildBEMProject(horn, prof, ringsOv, opts) {
       // slivers... BEM works better for equilateral"): divide the metric by the
       // LOCAL element width (perimeter/segs) -- uniform slicing then equalizes
       // ASPECT RATIO, packing stations where the horn is narrow.
-      var hW = opts.budget ? Math.max(0.5, Math.PI * (pr(prof.H[h1]) + pr(prof.V[h1])) / segs) : 1;   // entry 127c: square weighting ONLY when the count comes from the metric (budget path); fixed-count callers keep the legacy arc distribution
-      hCum.push(hCum[h1] + hGap / hW);
+      // entry 132: with GRADED wall counts the local element width is ~constant
+      // (per(z)/n(z) ~ per_mouth/segs), so the station metric uses THAT width --
+      // uniform-arc spacing at the effective element size, not throat-packing.
+      var hW = opts.budget ? Math.max(0.5, Math.PI * (pr(prof.H[Mh - 1]) + pr(prof.V[Mh - 1])) / segs) : 1;
+      // entry 147 (fusiontomsh study: curvature-based sizing): axial spacing is
+      // ALSO bounded by a chord-deviation (sagitta) limit s <= sqrt(8 R tol),
+      // tol = eEff/12, so the mouth roll and other tight curvature get the
+      // stations that geometric fidelity requires -- straight walls unaffected.
+      if (opts.budget && h1 > 0 && h1 < Mh - 1) {
+        var cA = prof.H[h1 - 1], cB = prof.H[h1], cC = prof.H[h1 + 1];
+        var az = pz(cA), ar = pr(cA), bz = pz(cB), br = pr(cB), cz = pz(cC), crr = pr(cC);
+        var d2 = 2 * ((bz - az) * (crr - ar) - (br - ar) * (cz - az));
+        if (Math.abs(d2) > 1e-12) {
+          var uu = bz * bz + br * br - az * az - ar * ar, vv = cz * cz + crr * crr - az * az - ar * ar;
+          var ccx = ((crr - ar) * uu - (br - ar) * vv) / d2, ccy = ((bz - az) * vv - (cz - az) * uu) / d2;
+          var Rcur = Math.hypot(bz - ccx, br - ccy);
+          var sMax = Math.sqrt(8 * Rcur * (hW / 12));   // sagitta bound: dev <= eEff/12
+          hCum.push(hCum[h1] + hGap / Math.min(hW, sMax));
+        } else hCum.push(hCum[h1] + hGap / hW);
+      } else hCum.push(hCum[h1] + hGap / hW);
     }
     // entry 127: the metric total IS the near-square station count (each unit =
     // one element-width of axial travel); opts.stations becomes the CAP. When a
@@ -3085,7 +3407,7 @@ function buildBEMProject(horn, prof, ringsOv, opts) {
         hCum = [0];
         for (var hb = 0; hb < Mh - 1; hb++) {
           var gB9 = Math.hypot(pz(prof.H[hb + 1]) - pz(prof.H[hb]), pr(prof.H[hb + 1]) - pr(prof.H[hb]), pr(prof.V[hb + 1]) - pr(prof.V[hb]));
-          var wB9 = Math.max(0.5, Math.PI * (pr(prof.H[hb]) + pr(prof.V[hb])) / segs);
+          var wB9 = Math.max(0.5, Math.PI * (pr(prof.H[Mh - 1]) + pr(prof.V[Mh - 1])) / segs);   // entry 132: graded width
           hCum.push(hCum[hb] + gB9 / wB9);
         }
       }
@@ -3112,7 +3434,11 @@ function buildBEMProject(horn, prof, ringsOv, opts) {
     }
     var p2 = { H: H2, V: V2, shape: prof.shape, rho: prof.rho, rhoArr: rA2, seNArr: sA2 };
     inner = buildRings(p2, segs); M = nSta;
+    if (opts.budget) gradedW = bemGradedWallAssembly(function (nQ) { return buildRings(p2, nQ); }, M, segs, thick, symQ, { srcCap: !!opts.srcCap, baffle: !!opts.baffle });   // entries 132/134/141: the prof path implements the ringsKept contract via buildRings
   }
+  var nodes, tris, NV, nSrc;   // hoisted: set by the graded or the legacy assembly
+  if (gradedW) { nodes = gradedW.nodes; tris = gradedW.tris; NV = gradedW.NV; nSrc = gradedW.nSrc; }
+  else {
   // entry 78: PTS = points per ring, QDS = quads per ring band. Closed ring: equal.
   // Quarter model: the validated full loft is built, then the 0..90deg arc is
   // EXTRACTED (t = j/segs in [0, 1/4], endpoints ON the symmetry planes) -- the
@@ -3128,8 +3454,10 @@ function buildBEMProject(horn, prof, ringsOv, opts) {
       }
     inner = innQ;
   }
-  // outer shell: vertex-normal offset
-  var outer = new Float32Array(M * PTS * 3);
+  // outer shell: vertex-normal offset (entry 132: extracted to bemOuterOffset,
+  // shared verbatim with the graded assembly -- single source of truth)
+  var outer = bemOuterOffset(inner, M, PTS, thick, symQ);
+  var __oldOuterBlock = false; if (__oldOuterBlock) {
   // REGRESSION 22 (entry 78, latent since entry 77): the offset-normal SIGN test used
   // only the radial component (n . (x,y) > 0). At a mouth-roll APEX the wall tangent
   // turns radial, the true outward normal is nearly pure +/-z, and the radial
@@ -3175,6 +3503,7 @@ function buildBEMProject(horn, prof, ringsOv, opts) {
       outer[k0 + 1] = inner[k0 + 1] + thick * ny / nl;
       outer[k0 + 2] = inner[k0 + 2] + thick * nz / nl;
     }
+  }
   // REFINED END CAPS (entry 77): the single-fan source/back discs carry irreducible
   // center-to-rim spokes (~throat radius) that CAP the whole mesh's lambda/6 fMax at
   // ~1.8 kHz regardless of wall density -- invisible until the 10 kHz band asked for
@@ -3338,7 +3667,31 @@ function buildBEMProject(horn, prof, ringsOv, opts) {
         tris.push([BR(tB, jB2), BR(tB, jB2 + 1), BR(tB + 1, jB2 + 1)]);
       }
   }
-  // global orientation: outward normals -> positive enclosed volume
+  }
+  // entry 129: mesh QUALITY REPORT (aspect stats) -- computed here so every
+  // export can state its own element quality alongside the lambda/6 honesty.
+  var qUnder2 = 0, qOver8 = 0, qWorst = 0, qf;
+  for (qf = 0; qf < tris.length; qf++) {
+    var qA = tris[qf][0] * 3, qB = tris[qf][1] * 3, qC = tris[qf][2] * 3;
+    var qe1 = Math.hypot(nodes[qB] - nodes[qA], nodes[qB + 1] - nodes[qA + 1], nodes[qB + 2] - nodes[qA + 2]);
+    var qe2 = Math.hypot(nodes[qC] - nodes[qB], nodes[qC + 1] - nodes[qB + 1], nodes[qC + 2] - nodes[qB + 2]);
+    var qe3 = Math.hypot(nodes[qA] - nodes[qC], nodes[qA + 1] - nodes[qC + 1], nodes[qA + 2] - nodes[qC + 2]);
+    var qar = Math.max(qe1, qe2, qe3) / Math.max(1e-12, Math.min(qe1, qe2, qe3));
+    if (qar < 2) qUnder2++; if (qar > 8) qOver8++; if (qar > qWorst) qWorst = qar;
+  }
+  // global orientation: outward normals -> positive enclosed volume.
+  // entry 134: OPEN meshes (infinite-baffle) have no enclosed volume -- orient
+  // by the source disc instead: its mean normal must point INTO the horn (+z).
+  if (gradedW && gradedW.open) {
+    var snz = 0, f2;
+    for (f2 = 0; f2 < nSrc; f2++) {
+      var A2 = tris[f2][0] * 3, B2 = tris[f2][1] * 3, C2 = tris[f2][2] * 3;
+      var u1 = nodes[B2] - nodes[A2], u2 = nodes[B2 + 1] - nodes[A2 + 1], u3 = nodes[B2 + 2] - nodes[A2 + 2];
+      var v1 = nodes[C2] - nodes[A2], v2 = nodes[C2 + 1] - nodes[A2 + 1], v3 = nodes[C2 + 2] - nodes[A2 + 2];
+      snz += u2 * v3 - u3 * v2;   // axial (first-coord) component of the cross product
+    }
+    if (snz < 0) for (f2 = 0; f2 < tris.length; f2++) { var tq = tris[f2][1]; tris[f2][1] = tris[f2][2]; tris[f2][2] = tq; }
+  } else {
   var vol = 0, f;
   for (f = 0; f < tris.length; f++) {
     var A = tris[f][0] * 3, B = tris[f][1] * 3, Cc = tris[f][2] * 3;
@@ -3347,6 +3700,7 @@ function buildBEMProject(horn, prof, ringsOv, opts) {
           + nodes[A + 2] * (nodes[B] * nodes[Cc + 1] - nodes[B + 1] * nodes[Cc])) / 6;
   }
   if (vol < 0) for (f = 0; f < tris.length; f++) { var tp = tris[f][1]; tris[f][1] = tris[f][2]; tris[f][2] = tp; }
+  }
   // FINS IN THE ACOUSTIC BOUNDARY (2026-07-14): floating closed solids appended
   // after the horn body; per-solid outward orientation by signed volume. WN fins
   // never touch the walls (designed clearance), so no Boolean union is needed.
@@ -3436,7 +3790,9 @@ function buildBEMProject(horn, prof, ringsOv, opts) {
            nNodes: NV + nEv, nElems: tris.length + nEvE, nBnd: tris.length, nSrc: nSrc,
            maxEdge: eMax, edgeSta: eMaxSta, edgeRing: eMaxRing,
            fMax: 344000 / (6 * eMax), angles: ang, anglesV: angV, nH: P9, nHornE: nHornE, nFinE: nFinE,
-           sym: symQ ? 2 : 0 };   // entry 78: 2 = quarter model, NumCalc SYMMETRY "1 1 0" at origin
+           sym: symQ ? 2 : 0,   // entry 78: 2 = quarter model, NumCalc SYMMETRY "1 1 0" at origin
+           qUnder2: qUnder2, qOver8: qOver8, qWorst: qWorst,
+           open: gradedW ? gradedW.open : 0, rimSpan: gradedW ? gradedW.rimSpan : 0, capDepth: gradedW ? gradedW.capDepth : 0 };
 }
 // STEP EXPORT (entry 92, forum request). Faceted BREP per the AP214 merged
 // schema: faceted_brep_shape_representation WR3 requires every shell face to be
@@ -3668,6 +4024,11 @@ function stepFromNurbs(sf, name) {
   return head + L.join("\n") + "\nENDSEC;\nEND-ISO-10303-21;\n";
 }
 function bemToMsh(bp, opts) {
+  // entry 136: FINAL GATE -- a corrupt mesh must throw, never save.
+  if (bp && bp.objNodes && (bp.objNodes.indexOf("NaN") !== -1 || bp.objNodes.indexOf("Infinity") !== -1))
+    throw new Error("BEM export aborted: non-finite node coordinates -- check the parameters");
+  if (bp && bp.objElems && (bp.objElems.indexOf("NaN") !== -1 || bp.objElems.indexOf("Infinity") !== -1))
+    throw new Error("BEM export aborted: non-finite element data -- check the parameters");
   opts = opts || {};
   var rib = (opts.ribbonW > 0 && opts.ribbonH > 0) ? { w: opts.ribbonW / 2000, h: opts.ribbonH / 2000 } : null;   // half-sizes in METERS (objNodes units)
   var nl = bp.objNodes.trim().split("\n"), el = bp.objElems.trim().split("\n");
@@ -3808,7 +4169,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
 
   /* ================= state ================= */
   var S = {
-    family: "jmlc", fc: 400, throatD: 35.56, entryDeg: 0, T0: 0.7, trunc: 175, aplat: 4, ellMu: 0.88, ellSigma: 0.53, decoupeN: 0.3, decoupeP: 11, throatShape: "round", lipStyle: "round", bemF: 14333, bemSym: "full", dirOv: false, ribW: 0, ribH: 0, ribL: 0, exitLen: 0, exitDeg: 10, plateT: 0, plateD: 0, boltN: 0, boltCircleD: 0, boltHoleD: 0, boltRot: 0,
+    family: "jmlc", fc: 400, throatD: 35.56, entryDeg: 0, T0: 0.7, trunc: 175, aplat: 4, ellMu: 0.88, ellSigma: 0.53, decoupeN: 0.3, decoupeP: 11, throatShape: "round", lipStyle: "round", bemF: 14333, bemSym: "full", bemTarget: "akabak", bemModel: "free", bemSrc: "flat", bemPrev: false, dirOv: false, ribW: 0, ribH: 0, ribL: 0, exitLen: 0, exitDeg: 10, plateT: 0, plateD: 0, boltN: 0, boltCircleD: 0, boltHoleD: 0, boltRot: 0,
     petf: false, petfPreset: "off", petfShape: "exp", petfRef: "throat", Tadd: 3.5, fmult: 3, sOff: 0,
     fins: "off", shell: "uniform", finT: 10, adaptL: 25, wnUL: 0.5, wnUC: 0.68, showConstr: false, wnFins: 0, wnFinT: 1.0, wnClear: 0.4, wnFinU1: 0.7,
     aspect: 1.0, section: "ellipse", cornerR: 60, covH: 90, covV: 40, f0: 800, osK: 1.0, osS: 0.7, osN: 4, seN: 2.5, spProj: "flat", f0V: 0, TaddV: 0.4, fmultV: 2, rosR: 130, rosA: 39, rosA0: 7.5, rosK: 1.8, rosRr: 0.3, rosB: 0.3, rosM: 0.8, rosQ: 3.7, flareR: 20, flareWrap: 0, thick: 5
@@ -4045,6 +4406,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       dV += (dV ? "L" : "M") + esc(X(est.f[i])) + "," + esc(Y(est.bwV[i])) + " ";
     }
     var svg = '<line x1="' + pad + '" y1="' + (H - 26) + '" x2="' + (W - 10) + '" y2="' + (H - 26) + '" stroke="var(--line)"/>';
+    svg += logGridSVG(X, f0c, f1c, 14, H - 26);   /* entry 143 */
     fTicks(f0c, f1c).forEach(function (f) { svg += '<text x="' + esc(X(f)) + '" y="' + (H - 14) + '" text-anchor="middle" font-size="8" fill="var(--faint)" stroke="none">' + (f >= 1000 ? f / 1000 + "k" : f) + '</text>'; });
     [180, 90, 0].forEach(function (v) { svg += '<text x="' + (pad - 4) + '" y="' + esc(Y(v) + 3) + '" text-anchor="end" font-size="8" fill="var(--faint)" stroke="none">' + v + '\u00b0</text>'; });
     svg += '<path d="' + dH + '" fill="none" stroke="var(--base)" stroke-width="1.3"/>';
@@ -4064,6 +4426,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       d += (d ? "L" : "M") + esc(X(est.f[i])) + "," + esc(Y(est.di[i])) + " ";
     }
     var svg = '<line x1="' + pad + '" y1="' + (H - 26) + '" x2="' + (W - 10) + '" y2="' + (H - 26) + '" stroke="var(--line)"/>';
+    svg += logGridSVG(X, f0c, f1c, 14, H - 26);   /* entry 143 */
     fTicks(f0c, f1c).forEach(function (f) { svg += '<text x="' + esc(X(f)) + '" y="' + (H - 14) + '" text-anchor="middle" font-size="8" fill="var(--faint)" stroke="none">' + (f >= 1000 ? f / 1000 + "k" : f) + '</text>'; });
     [25, 12, 0].forEach(function (v) { svg += '<text x="' + (pad - 4) + '" y="' + esc(Y(v) + 3) + '" text-anchor="end" font-size="8" fill="var(--faint)" stroke="none">' + v + '</text>'; });
     svg += '<path d="' + d + '" fill="none" stroke="var(--base)" stroke-width="1.3"/>';
@@ -4138,6 +4501,108 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     return out;
   }
   function fTickLabel(f) { return f >= 1000 ? (Math.round(f / 100) / 10) + "k" : Math.round(f); }
+  // entry 143 (Boundary Lab plotting conventions): decade-major, 2/5-minor
+  // log-frequency gridlines behind every chart trace.
+  function logGridSVG(Xfn, f0c, f1c, yTop, yBot) {
+    var s9 = "", d9;
+    for (d9 = 1; d9 <= 100000; d9 *= 10) [1, 2, 5].forEach(function (m9) {
+      var fq = d9 * m9;
+      if (fq <= f0c || fq >= f1c) return;
+      s9 += '<line x1="' + esc(Xfn(fq)) + '" y1="' + yTop + '" x2="' + esc(Xfn(fq)) + '" y2="' + yBot + '" stroke="var(--' + (m9 === 1 ? 'gridmaj' : 'grid') + ')" stroke-width="' + (m9 === 1 ? 0.7 : 0.4) + '"/>';
+    });
+    return s9;
+  }
+  // entry 144: GROUP DELAY as its own tile -- unwrapped T-matrix phase,
+  // finite-difference tau, 5-point median smoothing (raw FD is spiky on a
+  // coarse f grid and looked broken as an overlay), robust percentile scale.
+  function gdChartSVG(R, col) {
+    var W = 350, H = 150, pad = 32;
+    var f0c = chartFWin ? chartFWin.f0 : 100, f1c = chartFWin ? chartFWin.f1 : 20000;
+    var fMin = Math.log10(f0c), fMax = Math.log10(f1c);
+    function X(f) { return pad + (W - pad - 10) * (Math.log10(f) - fMin) / (fMax - fMin); }
+    if (!R || R.length < 6 || R[0].ph === undefined) return "";
+    var un = [R[0].ph], i;
+    for (i = 1; i < R.length; i++) {
+      var dp = R[i].ph - R[i - 1].ph;
+      while (dp > Math.PI) dp -= 2 * Math.PI;
+      while (dp < -Math.PI) dp += 2 * Math.PI;
+      un.push(un[i - 1] + dp);
+    }
+    var raw = [];
+    for (i = 1; i < R.length; i++) {
+      var dw = 2 * Math.PI * (R[i].f - R[i - 1].f);
+      if (dw > 0) raw.push({ f: 0.5 * (R[i].f + R[i - 1].f), t: -(un[i] - un[i - 1]) / dw * 1000 });
+    }
+    var sm = [];
+    for (i = 0; i < raw.length; i++) {
+      var wnd = raw.slice(Math.max(0, i - 2), Math.min(raw.length, i + 3)).map(function (q) { return q.t; }).sort(function (a, b) { return a - b; });
+      sm.push({ f: raw[i].f, t: wnd[Math.floor(wnd.length / 2)] });
+    }
+    var vis = sm.filter(function (q) { return q.f >= f0c && q.f <= f1c && isFinite(q.t); });
+    if (vis.length < 4) return "";
+    var ts = vis.map(function (q) { return q.t; }).sort(function (a, b) { return a - b; });
+    var tLo = Math.min(0, ts[Math.floor(0.05 * ts.length)]), tHi = Math.max(ts[Math.floor(0.95 * ts.length)] * 1.25, tLo + 0.5);
+    function Y(v) { return 14 + (H - 40) * (tHi - Math.max(tLo, Math.min(tHi, v))) / (tHi - tLo); }
+    var svg = '<line x1="' + pad + '" y1="' + (H - 26) + '" x2="' + (W - 10) + '" y2="' + (H - 26) + '" stroke="var(--line)"/>';
+    svg += logGridSVG(X, f0c, f1c, 14, H - 26);
+    [0, 0.5, 1, 2, 5, 10, 20].forEach(function (g) {
+      if (g <= tLo || g >= tHi) return;
+      svg += '<line x1="' + pad + '" y1="' + esc(Y(g)) + '" x2="' + (W - 10) + '" y2="' + esc(Y(g)) + '" stroke="var(--' + (g === 0 ? 'gridmaj' : 'grid') + ')" stroke-width="0.5"/>' +
+        '<text x="' + (pad - 4) + '" y="' + esc(Y(g) + 3) + '" text-anchor="end" font-size="8" fill="var(--faint)" font-family="var(--mono)">' + g + '</text>';
+    });
+    var d = "";
+    vis.forEach(function (q, qi) { d += (qi ? "L" : "M") + esc(X(q.f)) + " " + esc(Y(q.t)) + " "; });
+    svg += '<path d="' + d + '" fill="none" stroke="' + col + '" stroke-width="1.4"/>';
+    if (S.fc >= f0c && S.fc <= f1c) svg += '<line x1="' + esc(X(S.fc)) + '" y1="14" x2="' + esc(X(S.fc)) + '" y2="' + (H - 26) + '" stroke="var(--petf)" stroke-width="0.6" stroke-dasharray="3 3"/>';
+    fTicks(f0c, f1c).forEach(function (f9) { svg += '<text x="' + esc(X(f9)) + '" y="' + (H - 14) + '" text-anchor="middle" font-size="8" fill="var(--faint)" font-family="var(--mono)">' + (f9 >= 1000 ? f9 / 1000 + "k" : f9) + '</text>'; });
+    svg += '<text x="' + pad + '" y="10" font-size="9" fill="var(--ink)" font-family="var(--mono)" letter-spacing=".04em">GROUP DELAY \u2014 ms \u00b7 1-D WEBSTER ESTIMATE (NOT BEM)</text>';
+    return '<svg viewBox="0 0 ' + W + " " + H + '" style="width:100%;height:auto" role="img" aria-label="Group delay estimate">' + svg + '</svg>';
+  }
+  // entry 144: FLARE RATE / LOCAL CUTOFF -- fc_loc(z) = (c/4pi) d(lnS)/dz with
+  // the design fc line: WHERE the horn loads and where loading stops. The
+  // chart every exponential-horn text draws (Kolbrek), absent from every
+  // parametric tool we know of.
+  function frChartSVG(prof, col) {
+    var W = 350, H = 150, pad = 32, c0 = 344000;   // mm/s
+    if (!prof || !prof.H || prof.H.length < 8) return "";
+    var shp = prof.shape || "ellipse", rho2 = prof.rho || 0, rA = prof.rhoArr, sA = prof.seNArr;
+    var Z = [], S9 = [], i;
+    for (i = 0; i < prof.H.length; i++) {
+      var hz = prof.H[i].z !== undefined ? prof.H[i].z : prof.H[i][0];
+      var hr = prof.H[i].r !== undefined ? prof.H[i].r : prof.H[i][1];
+      var vr = prof.V[i].r !== undefined ? prof.V[i].r : prof.V[i][1];
+      Z.push(hz); S9.push(Math.max(1e-6, sectionArea(sA ? "sellipse:" + sA[Math.min(i, sA.length - 1)] : shp, hr, vr, rA ? rA[Math.min(i, rA.length - 1)] : rho2)));
+    }
+    var pts = [];
+    for (i = 2; i < Z.length - 2; i++) {
+      var dz = Z[i + 2] - Z[i - 2];
+      if (dz <= 0) continue;
+      var m9 = (Math.log(S9[i + 2]) - Math.log(S9[i - 2])) / dz;
+      var fl = m9 * c0 / (4 * Math.PI);
+      if (isFinite(fl)) pts.push({ z: Z[i], fc: Math.max(0, fl) });
+    }
+    if (pts.length < 6) return "";
+    var zMax = Z[Z.length - 1] || 1;
+    var fTop = Math.max(2.5 * (S.fc || 300), pts.slice(Math.floor(pts.length * 0.3)).reduce(function (a, q) { return Math.max(a, q.fc); }, 0) * 1.2);
+    fTop = Math.min(fTop, 20 * (S.fc || 300));
+    function X(z) { return pad + (W - pad - 10) * z / zMax; }
+    function Y(v) { return 14 + (H - 40) * (1 - Math.max(0, Math.min(1, v / fTop))); }
+    var svg = '<line x1="' + pad + '" y1="' + (H - 26) + '" x2="' + (W - 10) + '" y2="' + (H - 26) + '" stroke="var(--line)"/>';
+    [0.25, 0.5, 0.75].forEach(function (fr9) {
+      svg += '<line x1="' + pad + '" y1="' + esc(Y(fTop * fr9)) + '" x2="' + (W - 10) + '" y2="' + esc(Y(fTop * fr9)) + '" stroke="var(--grid)" stroke-width="0.4"/>' +
+        '<text x="' + (pad - 4) + '" y="' + esc(Y(fTop * fr9) + 3) + '" text-anchor="end" font-size="8" fill="var(--faint)" font-family="var(--mono)">' + Math.round(fTop * fr9) + '</text>';
+    });
+    if (S.fc) svg += '<line x1="' + pad + '" y1="' + esc(Y(S.fc)) + '" x2="' + (W - 10) + '" y2="' + esc(Y(S.fc)) + '" stroke="var(--petf)" stroke-width="0.7" stroke-dasharray="4 3"/>' +
+      '<text x="' + (W - 10) + '" y="' + esc(Y(S.fc) - 3) + '" text-anchor="end" font-size="8" fill="var(--petf)" font-family="var(--mono)">design fc ' + S.fc + '</text>';
+    var d = "";
+    pts.forEach(function (q, qi) { d += (qi ? "L" : "M") + esc(X(q.z)) + " " + esc(Y(q.fc)) + " "; });
+    svg += '<path d="' + d + '" fill="none" stroke="' + col + '" stroke-width="1.4"/>';
+    [0, 0.25, 0.5, 0.75, 1].forEach(function (fr9) {
+      svg += '<text x="' + esc(X(zMax * fr9)) + '" y="' + (H - 14) + '" text-anchor="middle" font-size="8" fill="var(--faint)" font-family="var(--mono)">' + Math.round(zMax * fr9) + '</text>';
+    });
+    svg += '<text x="' + pad + '" y="10" font-size="9" fill="var(--ink)" font-family="var(--mono)" letter-spacing=".04em">LOCAL CUTOFF f\u2098(z) \u2014 Hz vs axial mm \u00b7 (c/4\u03c0)\u00b7d ln S/dz</text>';
+    return '<svg viewBox="0 0 ' + W + " " + H + '" style="width:100%;height:auto" role="img" aria-label="Local cutoff along the horn">' + svg + '</svg>';
+  }
   function splChartSVG(R, col) {
     var W = 350, H = 150, pad = 32;
     var f0c = chartFWin ? chartFWin.f0 : 100, f1c = chartFWin ? chartFWin.f1 : 20000;
@@ -4149,6 +4614,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     for (i = 0; i < R.length; i++) d += (i === 0 ? "M" : "L") + esc(X(R[i].f)) + "," + esc(Y(R[i].db)) + " ";
     var svg = '<line x1="' + pad + '" y1="' + (H - 26) + '" x2="' + (W - 10) + '" y2="' + (H - 26) + '" stroke="var(--line)" stroke-width="0.8"/>' +
       '<line x1="' + pad + '" y1="14" x2="' + pad + '" y2="' + (H - 26) + '" stroke="var(--line)" stroke-width="0.8"/>';
+    svg += logGridSVG(X, f0c, f1c, 14, H - 26);   /* entry 143 */
     [0, -10, -20, -30].forEach(function (g9) {
       svg += '<line x1="' + pad + '" y1="' + esc(Y(g9)) + '" x2="' + (W - 10) + '" y2="' + esc(Y(g9)) + '" stroke="var(--' + (g9 === 0 ? 'gridmaj' : 'grid') + ')" stroke-width="0.7"/>' +
         '<text x="' + (pad - 4) + '" y="' + esc(Y(g9) + 3) + '" text-anchor="end" font-size="8" fill="var(--faint)" font-family="var(--mono)">' + g9 + '</text>';
@@ -4319,6 +4785,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       '<input type="range" id="rng_' + p.key + '" min="' + p.min + '" max="' + p.max + '" step="' + p.step + '" value="' + S[p.key] + '" aria-label="' + p.label + '"></div>';
   }
   var lastDirEst = null;
+  var buildCurrentBEM = null;   // entry 135: shared scope (assigned in build())
   var lastAct = null, lastRef = null, lastProf = null;
   // entry 96: charts render standalone so the semantic zoom re-renders ONLY the
   // charts (windowed fArr recompute), not the geometry/3-D pipeline.
@@ -4335,6 +4802,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     if (_hvOn) {
       document.getElementById("zchart").innerHTML = '<div style="font-family:var(--mono);font-size:10px;color:var(--faint);padding:14px;line-height:1.6;border:1px solid var(--line)">1-D WEBSTER LOADING ESTIMATE \u2014 DISABLED<br>The per-azimuth HVDiff loft has no justified 1-D propagation coordinate; a planar H/V approximation would not represent the exported 3-D geometry.</div>';
       var _sp0 = document.getElementById("spchart"); if (_sp0) _sp0.innerHTML = "";
+      ["gdchart", "frchart"].forEach(function (cid9) { var _c9 = document.getElementById(cid9); if (_c9) _c9.innerHTML = ""; });
     } else if (S.family === "biradial" && lastAct && lastAct.fan) {
       // per-cell law coordinate: S(x) = 5 cells of the book rule along the center-cell radius
       var _F5 = lastAct.fan, _NN = 220, _eH = [], _eV = [];
@@ -4347,15 +4815,21 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       lastAct.websterCoordinateLength = _F5.Rm - _F5.Rarr;
       document.getElementById("zchart").innerHTML = zChartSVG(throatImpedance({ H: _eH, V: _eV, shape: "ellipse", rho: 0 }, fArr, "axial"), col);
       var _sp1 = document.getElementById("spchart"); if (_sp1) _sp1.innerHTML = splChartSVG(hornResponse({ H: _eH, V: _eV, shape: "ellipse", rho: 0 }, fArr, "axial"), col);
+      var _gd1 = document.getElementById("gdchart"); if (_gd1) _gd1.innerHTML = gdChartSVG(hornResponse({ H: _eH, V: _eV, shape: "ellipse", rho: 0 }, fArr, "axial"), col);
+      var _fr1 = document.getElementById("frchart"); if (_fr1) _fr1.innerHTML = frChartSVG({ H: _eH, V: _eV, shape: "ellipse", rho: 0 }, col);
     } else if (S.family === "jmlc" && lastAct && lastAct.Ttrace && lastAct.Ttrace.length === lastAct.wall.length) {
       var _sm = lastAct.wall.map(function (w9, i9) { return { z: w9.z, s: lastAct.Ttrace[i9].s }; });
       lastAct.websterCoordinateLength = _sm[_sm.length - 1].s;
       document.getElementById("zchart").innerHTML = zChartSVG(throatImpedance(actProf.spApplied ? profOf(lastAct, 300) : actProf, fArr, "wavefront", _sm), col);
       var _sp2 = document.getElementById("spchart"); if (_sp2) _sp2.innerHTML = splChartSVG(hornResponse(actProf.spApplied ? profOf(lastAct, 300) : actProf, fArr, "wavefront", _sm), col);
+      var _gd2 = document.getElementById("gdchart"); if (_gd2) _gd2.innerHTML = gdChartSVG(hornResponse(actProf.spApplied ? profOf(lastAct, 300) : actProf, fArr, "wavefront", _sm), col);
+      var _fr2 = document.getElementById("frchart"); if (_fr2) _fr2.innerHTML = frChartSVG(actProf.spApplied ? profOf(lastAct, 300) : actProf, col);
     } else {
       if (lastAct) lastAct.websterCoordinateLength = lastAct.axialDepth || null;
       document.getElementById("zchart").innerHTML = zChartSVG(throatImpedance(actProf.spApplied ? profOf(lastAct, 300) : actProf, fArr, "axial"), col);
       var _sp3 = document.getElementById("spchart"); if (_sp3) _sp3.innerHTML = splChartSVG(hornResponse(actProf.spApplied ? profOf(lastAct, 300) : actProf, fArr, "axial"), col);
+      var _gd3 = document.getElementById("gdchart"); if (_gd3) _gd3.innerHTML = gdChartSVG(hornResponse(actProf.spApplied ? profOf(lastAct, 300) : actProf, fArr, "axial"), col);
+      var _fr3 = document.getElementById("frchart"); if (_fr3) _fr3.innerHTML = frChartSVG(actProf.spApplied ? profOf(lastAct, 300) : actProf, col);
     }
     // REPORTS: beamwidth + DI geometric estimates (Keele mouth-size relation reversed)
     (function () {
@@ -4417,11 +4891,17 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     }
     side += '<div class="sect">EXPORT</div>' +
       '<button class="btn" id="exCsv">PROFILE CSV (H + V)</button>' +
+      '<select class="psel" id="bemTargetSel" aria-label="BEM solver target" style="margin-bottom:4px">' +
+      [["akabak", "BEM target: AKABAK"], ["blab", "BEM target: Boundary Lab"]].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === (S.bemTarget || "akabak") ? " selected" : "") + '>' + o[1] + "</option>"; }).join("") + '</select>' +
+      '<select class="psel" id="bemModelSel" aria-label="BEM model" style="margin-bottom:4px">' +
+      [["free", "BEM model: free-standing (closed solid)"], ["baffle", "BEM model: infinite baffle (inner + source, open rim)"]].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === (S.bemModel || "free") ? " selected" : "") + '>' + o[1] + "</option>"; }).join("") + '</select>' +
+      '<select class="psel" id="bemSrcSel" aria-label="BEM source" style="margin-bottom:4px">' +
+      [["flat", "BEM source: flat piston"], ["cap", "BEM source: spherical cap (auto, \u22a5 walls)"]].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === (S.bemSrc || "flat") ? " selected" : "") + '>' + o[1] + "</option>"; }).join("") + '</select>' +
       '<select class="psel" id="bemSymSel" aria-label="BEM symmetry" style="margin-bottom:4px">' +
       [["full", "BEM: full mesh (no symmetry)"], ["quarter", "BEM: quarter mesh (2 symmetry planes, ~4\u00d7 fewer elements, much faster solves)"]].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === (S.bemSym || "full") ? " selected" : "") + '>' + o[1] + "</option>"; }).join("") + '</select>' +
       '<select class="psel" id="bemFSel" aria-label="BEM mesh density" style="margin-bottom:4px">' +
       [["14333", "BEM mesh: 4 mm quality \u2014 recommended (usable to ~20 kHz)"], ["20000", "BEM mesh: 2.9 mm \u2014 \u03bb/6 @ 20 kHz"], ["40000", "BEM mesh: 1.4 mm \u2014 \u03bb/6 @ 40 kHz"]].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === String(S.bemF || 14333) ? " selected" : "") + '>' + o[1] + "</option>"; }).join("") + '</select>' +
-      '<button class="btn" id="exAkabak" style="border-color:var(--ink)">AKABAK BEM MESH (.msh)</button>' +
+      '<button class="btn" id="exAkabak" style="border-color:var(--ink)">EXPORT BEM MESH (.msh)</button>' +
       '<button class="btn" id="exNurbs">STEP (NURBS SURFACE)</button>' +
       '<button class="btn" id="exStl">STL SOLID + ROUNDOVER</button>' +
       '<button class="btn" id="exShell" style="display:none">WATERTIGHT SHELL STL</button>' +
@@ -4442,7 +4922,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       '<button class="btn" id="loadDesign" style="margin:0;flex:1">LOAD</button>' +
       '<input type="file" id="loadFile" accept=".json" style="display:none"></div>' + side + '</aside>' +
       '<main>' +
-      '<div style="padding:12px 16px;border-bottom:1px solid var(--line)"><div class="eyebrow" style="margin-bottom:6px">3-D PREVIEW \u2014 DRAG ROTATE \u00b7 WHEEL ZOOM <button class="btn" id="showConstr" style="display:none;width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">SHOW CONSTRUCTION</button><button class="btn" id="dirOvBtn" style="width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">DIRECTIVITY: OFF</button></div>' +
+      '<div style="padding:12px 16px;border-bottom:1px solid var(--line)"><div class="eyebrow" style="margin-bottom:6px">3-D PREVIEW \u2014 DRAG ROTATE \u00b7 WHEEL ZOOM <button class="btn" id="showConstr" style="display:none;width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">SHOW CONSTRUCTION</button><button class="btn" id="dirOvBtn" style="width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">DIRECTIVITY: OFF</button><button class="btn" id="bemPrevBtn" style="width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">BEM MESH: OFF</button></div>' +
       '<div id="view3d" style="width:100%;height:380px;background:#FFFFFF;touch-action:none;cursor:grab"></div>' +
       '<div id="v3dnote" style="font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:6px;letter-spacing:.04em"></div></div>' +
       '<div id="drawing" style="padding:10px 12px 0"></div>' +
@@ -4450,6 +4930,8 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       '<div style="padding:14px 16px 0 16px"><div class="eyebrow">REPORTS \u2014 1-D / GEOMETRIC ESTIMATES (NOT A BEM SUBSTITUTE)</div></div>' +
       '<div class="lower"><div style="flex:1 1 300px;max-width:400px" id="zchart"></div><div style="flex:1 1 300px;max-width:400px" id="spchart"></div>' +
       '<div style="flex:1 1 300px;max-width:400px" id="tchart"></div>' +
+      '<div style="flex:1 1 300px;max-width:400px" id="gdchart"></div>' +
+      '<div style="flex:1 1 300px;max-width:400px" id="frchart"></div>' +
       '<div style="flex:1 1 300px;max-width:400px" id="bwchart"></div>' +
       '<div style="flex:1 1 300px;max-width:400px" id="dichart"></div>' +
       '<div class="eqs" id="eqs"></div></div>' +
@@ -4542,6 +5024,30 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     document.getElementById("bemSymSel").addEventListener("change", function (e) {
       S.bemSym = e.target.value;
     });
+    document.getElementById("bemModelSel").addEventListener("change", function (e) {
+      S.bemModel = e.target.value;
+    });
+    document.getElementById("bemSrcSel").addEventListener("change", function (e) {
+      S.bemSrc = e.target.value;
+    });
+    document.getElementById("bemTargetSel").addEventListener("change", function (e) {
+      S.bemTarget = e.target.value;
+      // entry 133: Boundary Lab solves freestanding FULL meshes -- quarter is
+      // AKABAK-only, so the symmetry select is disabled (and ignored) for bLab.
+      // entry 137 (Boundary Lab source study): bLab supports mirror symmetry
+      // (mode "xy": planes X=0/Y=0 = our lateral axes, positive fundamental
+      // domain, 1e-9 m tolerance -- our quarter matches exactly; BEAT engine
+      // backend), so the symmetry select stays ENABLED for bLab.
+      var mo9 = document.getElementById("bemModelSel");
+      if (mo9) mo9.disabled = (S.bemTarget === "blab");   // entry 134: bLab = freestanding closed only
+    });
+    document.getElementById("bemPrevBtn").addEventListener("click", function () {
+      S.bemPrev = !S.bemPrev;
+      this.textContent = "BEM MESH: " + (S.bemPrev ? "ON" : "OFF");
+      var nB = document.getElementById("v3dnote");
+      if (S.bemPrev && nB) nB.textContent = "BEM mesh preview: the EXACT graded export mesh (SourceDisc dark) \u2014 updates with every parameter change";
+      update3D(lastAct);
+    });
     document.getElementById("dirOvBtn").addEventListener("click", function () {
       S.dirOv = !S.dirOv;
       this.textContent = "DIRECTIVITY: " + (S.dirOv ? "ON" : "OFF");
@@ -4625,26 +5131,66 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       var ntN = document.getElementById("v3dnote");
       if (ntN) ntN.textContent = "NURBS STEP saved: one bicubic B-spline surface (" + MN + "\u00d7" + (segsN + 1) + " interpolated), inner surface only \u2014 thicken in CAD; the faceted STEP remains for direct solids";
     });
+    buildCurrentBEM = function () {   // entry 134: shared by the export and the 3-D mesh preview (entry 135: assigned to the SHARED-scope var so update3D can reach it -- it was nested inside build() and the preview silently never ran)
+      var prof9 = profOf(lastAct, 300);
+      var wl9 = prof9.H, aM9 = wl9[wl9.length - 1].r !== undefined ? wl9[wl9.length - 1].r : wl9[wl9.length - 1][1];
+      var vl9 = prof9.V, bM9 = vl9[vl9.length - 1].r !== undefined ? vl9[vl9.length - 1].r : vl9[vl9.length - 1][1];
+      var perX9 = 2 * Math.PI * Math.sqrt((aM9 * aM9 + bM9 * bM9) / 2);
+      var arcOf9 = function (wq) { var s9 = 0; for (var i9 = 1; i9 < wq.length; i9++) { var A9 = wq[i9 - 1], B9 = wq[i9]; s9 += Math.hypot((B9.z !== undefined ? B9.z : B9[0]) - (A9.z !== undefined ? A9.z : A9[0]), (B9.r !== undefined ? B9.r : B9[1]) - (A9.r !== undefined ? A9.r : A9[1])); } return s9; };
+      var pathX9 = Math.max(arcOf9(prof9.H), arcOf9(prof9.V)) || lastAct.axialDepth || 200;
+      var bud9 = (S.bemF || 14333) <= 14333 ? 12000 : ((S.bemF || 14333) === 20000 ? 24000 : 90000);   // entry 128
+      var sz9 = bemBandSize(perX9, pathX9, (S.bemF || 14333), bud9);   // entry 114
+      var rings9 = null, ringsBld9 = null;
+      if (S.family === "biradial" && lastAct.fan) { rings9 = buildAraiFanRings(lastAct, sz9.segs, 0, 0); ringsBld9 = function (nQ) { return buildAraiFanRings(lastAct, nQ, 0, 0); }; }
+      else if (S.family === "wn" && lastAct.wn) { rings9 = buildWNRings(lastAct, sz9.segs, 0, 0); ringsBld9 = function (nQ) { return buildWNRings(lastAct, nQ, 0, 0); }; }   // entry 141: the ringsBuilder contract -- any future rings family passes its builder and grading is automatic
+      var finM9 = (S.family === "wn" && S.wnFins > 0 && lastAct.wn) ? wnFinMesh(lastAct, S.wnFinT, S.wnClear, 0.03, S.wnFinU1) : null;
+      var blab9 = (S.bemTarget === "blab");
+      var symReq9 = (S.bemSym === "quarter") && !rings9 && !(finM9 && finM9.length);   // entry 137: quarter allowed for bLab too (its xy mirror symmetry)
+      var baffle9 = !blab9 && (S.bemModel === "baffle") && !rings9;   // entry 134: graded prof path only; bLab = closed
+      var cap9 = (S.bemSrc === "cap") && !rings9 && !(S.ribW > 0 && S.ribH > 0);   // ribbon throats keep the rectangular face
+      var bp9 = buildBEMProject(lastAct, prof9, rings9, { stations: 400, segs: sz9.segs, targetEdge: sz9.targetEdge, budget: bud9, finMeshes: finM9, symmetry: symReq9 ? "quarter" : undefined, baffle: baffle9, srcCap: cap9, ringsBuilder: ringsBld9 });
+      return { bp: bp9, blab: blab9, baffle: baffle9, cap: cap9 };
+    };
     document.getElementById("exAkabak").addEventListener("click", function () {
       if (!lastAct) return;
       try {
-        var prof9 = profOf(lastAct, 300);
-        var wl9 = prof9.H, aM9 = wl9[wl9.length - 1].r !== undefined ? wl9[wl9.length - 1].r : wl9[wl9.length - 1][1];
-        var vl9 = prof9.V, bM9 = vl9[vl9.length - 1].r !== undefined ? vl9[vl9.length - 1].r : vl9[vl9.length - 1][1];
-        var perX9 = 2 * Math.PI * Math.sqrt((aM9 * aM9 + bM9 * bM9) / 2);
-        var arcOf9 = function (wq) { var s9 = 0; for (var i9 = 1; i9 < wq.length; i9++) { var A9 = wq[i9 - 1], B9 = wq[i9]; s9 += Math.hypot((B9.z !== undefined ? B9.z : B9[0]) - (A9.z !== undefined ? A9.z : A9[0]), (B9.r !== undefined ? B9.r : B9[1]) - (A9.r !== undefined ? A9.r : A9[1])); } return s9; };
-        var pathX9 = Math.max(arcOf9(prof9.H), arcOf9(prof9.V)) || lastAct.axialDepth || 200;
-        var bud9 = (S.bemF || 14333) <= 14333 ? 12000 : ((S.bemF || 14333) === 20000 ? 24000 : 90000);   // entry 128: 4 mm quality default (user: lambda/6 not needed with good element quality)
-        var sz9 = bemBandSize(perX9, pathX9, (S.bemF || 14333), bud9);   // entry 114: honest lambda/6 TARGET + a sane per-tier element budget; big horns cap and the note reports the TRUE achieved lambda/6 ceiling
-        var rings9 = null;
-        if (S.family === "biradial" && lastAct.fan) rings9 = buildAraiFanRings(lastAct, sz9.segs, 0, 0);
-        else if (S.family === "wn" && lastAct.wn) rings9 = buildWNRings(lastAct, sz9.segs, 0, 0);
-        var finM9 = (S.family === "wn" && S.wnFins > 0 && lastAct.wn) ? wnFinMesh(lastAct, S.wnFinT, S.wnClear, 0.03, S.wnFinU1) : null;
-        var symReq9 = (S.bemSym === "quarter") && !rings9 && !(finM9 && finM9.length);   // entry 114: native entry-78 quarter (rings families and fins ineligible)
-        var bp9 = buildBEMProject(lastAct, prof9, rings9, { stations: 400, segs: sz9.segs, targetEdge: sz9.targetEdge, budget: bud9, finMeshes: finM9, symmetry: symReq9 ? "quarter" : undefined });   // entry 127: metric-driven stations under a square-balancing budget
-        saveBlob(fname("akabak_bem") + ".msh", new Blob([bemToMsh(bp9)], { type: "text/plain" }));   // entry 90: the ribbon throat is GEOMETRY now -- the SourceDisc group IS the rectangular throat face
+        var cur9 = buildCurrentBEM();
+        var bp9 = cur9.bp, blab9 = cur9.blab;
+        var mshName9 = fname(blab9 ? "blab_bem" : (cur9.baffle ? "akabak_baffle_bem" : "akabak_bem")) + ".msh";
+        saveBlob(mshName9, new Blob([bemToMsh(bp9)], { type: "text/plain" }));
+        if (blab9) {
+          // entry 139: a ready-to-open Boundary Lab PROJECT next to the mesh --
+          // schema from project_io.py/dialogs.py (verified against their reader):
+          // imported mesh entry + SourceDisc driven on channel "main" + symmetry.
+          var proj9 = {
+            schema_version: 1,
+            ath_config_text: "",
+            ath_scripts: [],
+            active_ath_script_id: "",
+            ath_mesh: {},
+            imported_meshes: [{
+              name: "horn",
+              source_file: mshName9,
+              cleaned_file: null,
+              scale_factor: 0.001,
+              translation_mm: [0, 0, 0],
+              enabled: true,
+              locked: false
+            }],
+            stitch_imported_meshes: false,
+            symmetry: bp9.sym === 2 ? "xy" : "off",
+            source_config_by_name: {
+              "horn:SourceDisc": { channel: "main", driven: true, velocity_offset_db: 0.0 },
+              "horn:HornWalls": { channel: "main", driven: false, velocity_offset_db: 0.0 }
+            },
+            channel_config_by_name: {
+              "main": { delay_ms: 0.0, hpf: {}, level_db: 0.0, lpf: {}, polarity: 1 }
+            }
+          };
+          saveBlob(fname("blab_project") + ".blab.json", new Blob([JSON.stringify(proj9, null, 2)], { type: "application/json" }));
+        }   // entry 90: the ribbon throat is GEOMETRY now -- the SourceDisc group IS the rectangular throat face
         var nt9 = document.getElementById("v3dnote");
-        if (nt9) nt9.textContent = ((S.ribW > 0 && S.ribH > 0 && S.family !== "wn" && S.family !== "biradial") ? "RIBBON THROAT " + S.ribW + "\u00d7" + S.ribH + " mm (SourceDisc = the rectangular face) \u00b7 " : "") + "AKABAK mesh saved: " + bp9.nBnd + " elements" + (bp9.sym === 2 ? " (QUARTER model -- enable BOTH symmetry planes in the solver; the cut planes pass through the horn axis)" : "") + " \u00b7 \u03bb/6 honest to " + Math.round(bp9.fMax) + " Hz \u00b7 mm units \u00b7 GMSH 2.2 \u00b7 drive the \"SourceDisc\" group (import: Project > Import Mesh File, scale mm)";
+        if (nt9) nt9.textContent = ((S.ribW > 0 && S.ribH > 0 && S.family !== "wn" && S.family !== "biradial") ? "RIBBON THROAT " + S.ribW + "\u00d7" + S.ribH + " mm (SourceDisc = the rectangular face) \u00b7 " : "") + (blab9 ? "Boundary Lab mesh saved: " : "AKABAK mesh saved: ") + bp9.nBnd + " elements · quality: " + Math.round(100 * bp9.qUnder2 / bp9.nBnd) + "% under 2:1 aspect, worst " + bp9.qWorst.toFixed(1) + ":1" + (bp9.sym === 2 ? " (QUARTER model -- enable BOTH symmetry planes in the solver; the cut planes pass through the horn axis)" : "") + " \u00b7 \u03bb/6 honest to " + Math.round(bp9.fMax) + " Hz \u00b7 graded mesh" + (cur9.cap ? " \u00b7 spherical-cap source, depth " + bp9.capDepth.toFixed(1) + " mm (wavefront \u22a5 walls)" : "") + (cur9.baffle ? " \u00b7 INFINITE BAFFLE model: open mouth rim on the baffle plane (rim planarity " + bp9.rimSpan.toFixed(2) + " mm" + (bp9.rimSpan > 2 ? " \u2014 ROLLED mouth, consider free-standing" : "") + "); AKABAK SimType: Infinite Baffle" : "") + " \u00b7 mm units \u00b7 GMSH 2.2 \u00b7 " + (blab9 ? "Boundary Lab: a ready-to-open .blab.json PROJECT is saved with the mesh (put both in one folder, File > Open Project) \u2014 SourceDisc pre-assigned as the driven radiator" + (bp9.sym === 2 ? "; set Symmetry = XY (BEAT engine backend)" : "") : "AKABAK: Project > Import Mesh File (scale mm), drive \"SourceDisc\" (tag 1)");   // entries 132/133/134/137
       } catch (e9) { var nt8 = document.getElementById("v3dnote"); if (nt8) nt8.textContent = "AKABAK export failed: " + e9; }
     });
     // entry 89 + 95 (forum): INTERACTIVE GRAPHS -- the drawing AND every SVG chart.
@@ -5182,6 +5728,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     return mesh;
   }
   function update3D(horn) {
+    window.__V3 = V3;   // entry 135: harness introspection (harmless)
     if (!V3.ok || !horn) return;
     try {
     var m = buildStyledMesh(horn, 140, 48);
@@ -5209,14 +5756,14 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       var _lm = new THREE.LineBasicMaterial({ color: 0x3A3A3A, transparent: true, opacity: 0.55 });
       for (var _j = 0; _j < _fam.q.length; _j += 15) {
         var _pts = [];
-        for (var _i = 0; _i < _pn; _i++) _pts.push(new THREE.Vector3(_fam.X[_i][_j], _fam.Z[_i][_j], 0));
+        for (var _i = 0; _i < _pn; _i++) _pts.push(new THREE.Vector3(_fam.Z[_i][_j], 0, -_fam.X[_i][_j]));   /* entry 135: view coords (H-plane sheet) */
         V3.constr.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(_pts), _lm));
       }
       var _wm2 = new THREE.LineBasicMaterial({ color: 0x9A9A9A, transparent: true, opacity: 0.45 });
       var _fr2 = buildWNRings(lastAct, 64, 0, 0);
       for (var _i2 = 0; _i2 < _fr2.M; _i2 += 12) {
         var _rp = [];
-        for (var _j2 = 0; _j2 <= 64; _j2++) { var _k2 = (_i2 * 64 + (_j2 % 64)) * 3; _rp.push(new THREE.Vector3(_fr2.rings[_k2 + 1], _fr2.rings[_k2], _fr2.rings[_k2 + 2])); }
+        for (var _j2 = 0; _j2 <= 64; _j2++) { var _k2 = (_i2 * 64 + (_j2 % 64)) * 3; _rp.push(new THREE.Vector3(_fr2.rings[_k2], _fr2.rings[_k2 + 2], -_fr2.rings[_k2 + 1]));   /* entry 135: view coords */ }
         V3.constr.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(_rp), _wm2));
       }
       V3.constr.position.set(-cx, -cy, -cz);
@@ -5240,18 +5787,62 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
         [[lastDirEst.bwH[_fi], true], [lastDirEst.bwV[_fi], false]].forEach(function (pl) {
           var _hw = pl[0] * Math.PI / 360;   // half-angle in rad
           var _pts = [], _a;
-          _pts.push(new THREE.Vector3(pl[1] ? _R * Math.sin(-_hw) : 0, _zM + _R * Math.cos(_hw), pl[1] ? 0 : _R * Math.sin(-_hw)));
-          _pts.push(new THREE.Vector3(0, _zM, 0));
-          _pts.push(new THREE.Vector3(pl[1] ? _R * Math.sin(_hw) : 0, _zM + _R * Math.cos(_hw), pl[1] ? 0 : _R * Math.sin(_hw)));
-          for (_a = 0; _a <= 24; _a++) {
-            var _ph = -_hw + 2 * _hw * _a / 24;
-            _pts.push(new THREE.Vector3(pl[1] ? _R * Math.sin(_ph) : 0, _zM + _R * Math.cos(_ph), pl[1] ? 0 : _R * Math.sin(_ph)));
-          }
+          // entry 135: VIEW coords -- the horn mesh is (axial, lat1, lat2) with
+          // rotateX(-pi/2) applied => view (axial, lat2, -lat1). H wedge lives
+          // in the axial/lat1 plane (view XZ), V in axial/lat2 (view XY).
+          function _dv(ph9) { return new THREE.Vector3(_zM + _R * Math.cos(ph9), pl[1] ? 0 : _R * Math.sin(ph9), pl[1] ? -_R * Math.sin(ph9) : 0); }
+          _pts.push(_dv(-_hw));
+          _pts.push(new THREE.Vector3(_zM, 0, 0));
+          _pts.push(_dv(_hw));
+          for (_a = 0; _a <= 24; _a++) _pts.push(_dv(-_hw + 2 * _hw * _a / 24));
           V3.dirov.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(_pts), _mm));
         });
       }
       V3.dirov.position.set(-cx, -cy, -cz);
       V3.group.add(V3.dirov);
+    }
+    // entry 134: BEM MESH PREVIEW -- the exact graded export mesh as wireframe
+    // (unique edges; SourceDisc edges dark, walls light), built through the
+    // SAME buildCurrentBEM path as the export so what you see is what solves.
+    if (V3.bemprev) { V3.group.remove(V3.bemprev); V3.bemprev = null; }
+    if (S.bemPrev && buildCurrentBEM) {
+      try {
+        var pv9 = buildCurrentBEM(), pb9 = pv9.bp;
+        var eSet9 = {}, eSrc9 = {}, pt9;
+        var msh9lines = null;   // derive edges from the tri list via the text? use bp.objElems
+        var eArr9 = pb9.objElems.trim().split("\n"), nA9 = pb9.objNodes.trim().split("\n");
+        var NP9 = parseInt(nA9[0], 10), coords9 = new Float32Array(NP9 * 3);
+        for (pt9 = 1; pt9 <= NP9; pt9++) {
+          var cw9 = nA9[pt9].split(" ");
+          coords9[(pt9 - 1) * 3] = parseFloat(cw9[3]) * 1000;        // entry 135: view X = axial
+          coords9[(pt9 - 1) * 3 + 1] = parseFloat(cw9[2]) * 1000;    // view Y = lat2
+          coords9[(pt9 - 1) * 3 + 2] = -parseFloat(cw9[1]) * 1000;   // view Z = -lat1
+        }
+        var nE9 = parseInt(eArr9[0], 10), eI9;
+        for (eI9 = 1; eI9 <= nE9; eI9++) {
+          var qw9 = eArr9[eI9].split(" ");
+          var a9 = parseInt(qw9[1], 10), b9 = parseInt(qw9[2], 10), c9 = parseInt(qw9[3], 10);
+          var tgt9 = (eI9 - 1) < pb9.nSrc ? eSrc9 : eSet9;
+          [[a9, b9], [b9, c9], [c9, a9]].forEach(function (pr9) {
+            var k9 = Math.min(pr9[0], pr9[1]) + "_" + Math.max(pr9[0], pr9[1]);
+            tgt9[k9] = pr9;
+          });
+        }
+        V3.bemprev = new THREE.Group();
+        [[eSet9, 0x9A9A9A, 0.55], [eSrc9, 0x222222, 0.9]].forEach(function (spec9) {
+          var pos9 = [];
+          for (var kk9 in spec9[0]) {
+            var pp9 = spec9[0][kk9];
+            pos9.push(coords9[pp9[0] * 3], coords9[pp9[0] * 3 + 1], coords9[pp9[0] * 3 + 2],
+                      coords9[pp9[1] * 3], coords9[pp9[1] * 3 + 1], coords9[pp9[1] * 3 + 2]);
+          }
+          var g9 = new THREE.BufferGeometry();
+          g9.setAttribute("position", new THREE.Float32BufferAttribute(pos9, 3));
+          V3.bemprev.add(new THREE.LineSegments(g9, new THREE.LineBasicMaterial({ color: spec9[1], transparent: true, opacity: spec9[2] })));
+        });
+        V3.bemprev.position.set(-cx, -cy, -cz);
+        V3.group.add(V3.bemprev);
+      } catch (ePrev9) { /* preview must never break the viewer */ }
     }
     V3.fit = span * 1.9;
     V3.dist = Math.max(V3.fit * 0.4, Math.min(V3.fit * 5, V3.dist || V3.fit));
