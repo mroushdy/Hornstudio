@@ -3181,6 +3181,25 @@ function buildBEMProject(horn, prof, ringsOv, opts) {
   // 5.7 mm edges. When opts.targetEdge (mm) is set, discs gain concentric rings so no
   // spoke exceeds it, and the flange annulus splits when thick > targetEdge. Absent
   // (legacy), nR = 1 everywhere and the mesh is IDENTICAL to the shipped two-band form.
+  // entry 128 (user, with an Ath reference mesh: "triangles are evenly
+  // distributed in a pizza-slice radial arrangement, and some near the middle
+  // have extremely sharp points... numerical inconsistencies in the top
+  // frequencies"): GRADED DISCS -- ring segment counts track the local
+  // circumference (n_t ~ 2*pi*r_t/eT, %4 for the quarter cut, floor 8),
+  // stitched ring-to-ring by the monotone zipper walk (cannot cross), tiny
+  // 8-slice fan only at the very hub. Gated on opts.budget like entry 127.
+  function gradedPlan(rimR, PTS9, eT9) {
+    var nR9 = Math.min(32, Math.max(1, Math.ceil(rimR / Math.max(eT9, 0.5))));
+    var counts = [], t9;
+    for (t9 = 1; t9 <= nR9; t9++) {
+      var r9 = rimR * t9 / nR9;
+      var n9 = Math.max(8, 4 * Math.round(2 * Math.PI * r9 / Math.max(eT9, 0.5) / 4));
+      counts.push(Math.min(PTS9, n9));
+    }
+    counts[nR9 - 1] = PTS9;   // the rim ring IS the wall ring
+    for (t9 = nR9 - 2; t9 >= 0; t9--) counts[t9] = Math.min(counts[t9], counts[t9 + 1]);   // monotone outward
+    return counts;
+  }
   var eT = opts.targetEdge || 0;
   var sx = 0, sy = 0, sz = 0, bx = 0, by = 0, bz = 0;
   // averaged over QDS points (j = 0..QDS-1). Closed ring: all points, legacy-identical.
@@ -3201,9 +3220,13 @@ function buildBEMProject(horn, prof, ringsOv, opts) {
     backRimR = Math.max(backRimR, Math.hypot(outer[j3 * 3] - bz, outer[j3 * 3 + 1] - bx, outer[j3 * 3 + 2] - by));
   }
   function nRfor(r) { return eT > 0 ? Math.min(32, Math.max(1, Math.ceil(r / eT))) : 1; }
-  var nRs = nRfor(srcRimR), nRb = nRfor(backRimR), nF = (eT > 0 && thick > eT) ? Math.min(8, Math.ceil(thick / eT)) : 1;
+  var graded = !!opts.budget;
+  var planS = graded ? gradedPlan(srcRimR, PTS, eT || srcRimR) : null;
+  var planB = graded ? gradedPlan(backRimR, PTS, eT || backRimR) : null;
+  var nRs = graded ? planS.length : nRfor(srcRimR), nRb = graded ? planB.length : nRfor(backRimR), nF = (eT > 0 && thick > eT) ? Math.min(8, Math.ceil(thick / eT)) : 1;
+  function planSum(pl) { var s9 = 0; for (var q9 = 0; q9 < pl.length - 1; q9++) s9 += pl[q9]; return s9; }   // interior rings only (the rim ring is the wall's)
   // nodes: [inner M*PTS][outer M*PTS][cSrc][cBack][srcRings][backRings][flangeRings]
-  var NV = 2 * M * PTS + 2 + (nRs - 1) * PTS + (nRb - 1) * PTS + (nF - 1) * PTS;
+  var NV = 2 * M * PTS + 2 + (graded ? planSum(planS) : (nRs - 1) * PTS) + (graded ? planSum(planB) : (nRb - 1) * PTS) + (nF - 1) * PTS;
   var nodes = new Float64Array(NV * 3);
   nodes.set(inner, 0); nodes.set(outer, M * PTS * 3);
   var cSrc = 2 * M * PTS, cBack = cSrc + 1;
@@ -3211,28 +3234,81 @@ function buildBEMProject(horn, prof, ringsOv, opts) {
   nodes[cBack * 3] = bz; nodes[cBack * 3 + 1] = bx; nodes[cBack * 3 + 2] = by;
   function IN(i, j) { return i * PTS + (j % PTS); }
   function OUT(i, j) { return M * PTS + i * PTS + (j % PTS); }
-  var srcBase = cBack + 1, backBase = srcBase + (nRs - 1) * PTS, flBase = backBase + (nRb - 1) * PTS;
+  var srcBase = cBack + 1, backBase = srcBase + (graded ? planSum(planS) : (nRs - 1) * PTS), flBase = backBase + (graded ? planSum(planB) : (nRb - 1) * PTS);
+  // graded ring offsets (ring t = 1..nR-1 interior; rim = wall ring)
+  var offS = [0], offB = [0];
+  if (graded) { for (var q8 = 0; q8 < planS.length - 1; q8++) offS.push(offS[q8] + planS[q8]); for (q8 = 0; q8 < planB.length - 1; q8++) offB.push(offB[q8] + planB[q8]); }
   function lerpNode(dst, ci, ri, fr) {  // center index, rim index, fraction center->rim
     nodes[dst * 3] = nodes[ci * 3] + (nodes[ri * 3] - nodes[ci * 3]) * fr;
     nodes[dst * 3 + 1] = nodes[ci * 3 + 1] + (nodes[ri * 3 + 1] - nodes[ci * 3 + 1]) * fr;
     nodes[dst * 3 + 2] = nodes[ci * 3 + 2] + (nodes[ri * 3 + 2] - nodes[ci * 3 + 2]) * fr;
   }
   var tI, jI;
-  for (tI = 1; tI < nRs; tI++) for (jI = 0; jI < PTS; jI++) lerpNode(srcBase + (tI - 1) * PTS + jI, cSrc, IN(0, jI), tI / nRs);
-  for (tI = 1; tI < nRb; tI++) for (jI = 0; jI < PTS; jI++) lerpNode(backBase + (tI - 1) * PTS + jI, cBack, OUT(0, jI), tI / nRb);
+  function gradedRing(base9, off9, plan9, tG, cI9, rimFn9) {
+    // ring tG (1..nR-1): n9 nodes at uniform PARAMETER around the rim shape,
+    // scaled tG/nR toward the center -- rim positions sampled by fractional
+    // index (linear along the rim polygon) so elliptical rims grade cleanly.
+    var n9 = plan9[tG - 1], fr9 = tG / plan9.length;
+    for (var j9 = 0; j9 < n9; j9++) {
+      var u9 = j9 * PTS / n9, i0 = Math.floor(u9) % PTS, i1 = (i0 + 1) % PTS, ff = u9 - Math.floor(u9);
+      var r0 = rimFn9(i0) * 3, r1 = rimFn9(i1) * 3, dst = (base9 + off9[tG - 1] + j9) * 3;
+      var rx = nodes[r0] + (nodes[r1] - nodes[r0]) * ff, ry = nodes[r0 + 1] + (nodes[r1 + 1] - nodes[r0 + 1]) * ff, rz = nodes[r0 + 2] + (nodes[r1 + 2] - nodes[r0 + 2]) * ff;
+      nodes[dst] = nodes[cI9 * 3] + (rx - nodes[cI9 * 3]) * fr9;
+      nodes[dst + 1] = nodes[cI9 * 3 + 1] + (ry - nodes[cI9 * 3 + 1]) * fr9;
+      nodes[dst + 2] = nodes[cI9 * 3 + 2] + (rz - nodes[cI9 * 3 + 2]) * fr9;
+    }
+  }
+  if (graded) {
+    for (tI = 1; tI < nRs; tI++) gradedRing(srcBase, offS, planS, tI, cSrc, function (j9) { return IN(0, j9); });
+    for (tI = 1; tI < nRb; tI++) gradedRing(backBase, offB, planB, tI, cBack, function (j9) { return OUT(0, j9); });
+  } else {
+    for (tI = 1; tI < nRs; tI++) for (jI = 0; jI < PTS; jI++) lerpNode(srcBase + (tI - 1) * PTS + jI, cSrc, IN(0, jI), tI / nRs);
+    for (tI = 1; tI < nRb; tI++) for (jI = 0; jI < PTS; jI++) lerpNode(backBase + (tI - 1) * PTS + jI, cBack, OUT(0, jI), tI / nRb);
+  }
   for (tI = 1; tI < nF; tI++) for (jI = 0; jI < PTS; jI++) lerpNode(flBase + (tI - 1) * PTS + jI, IN(M - 1, jI), OUT(M - 1, jI), tI / nF);
   function SR(t, j) { return t >= nRs ? IN(0, j) : (t === 0 ? cSrc : srcBase + (t - 1) * PTS + (j % PTS)); }
   function BR(t, j) { return t >= nRb ? OUT(0, j) : (t === 0 ? cBack : backBase + (t - 1) * PTS + (j % PTS)); }
   function FL(t, j) { return t === 0 ? IN(M - 1, j) : (t >= nF ? OUT(M - 1, j) : flBase + (t - 1) * PTS + (j % PTS)); }
   var tris = [];
-  // 1) SOURCE disc on inner ring 1 (elements 0..nSrc-1 BY CONSTRUCTION; nSrc = segs*(2*nRs-1))
-  for (var jS = 0; jS < QDS; jS++) tris.push([cSrc, SR(1, jS), SR(1, jS + 1)]);
-  for (var tS = 1; tS < nRs; tS++)
-    for (var jS2 = 0; jS2 < QDS; jS2++) {
-      tris.push([SR(tS, jS2), SR(tS + 1, jS2), SR(tS + 1, jS2 + 1)]);
-      tris.push([SR(tS, jS2), SR(tS + 1, jS2 + 1), SR(tS, jS2 + 1)]);
+  var nSrc;
+  function gradedDiscTris(base9, off9, plan9, cI9, rimFn9, flip9) {
+    // hub fan + zippered ring-to-ring transitions; in symQ only the first
+    // quadrant's arc of each ring is stitched (all counts %4, phase 0 --
+    // nodes sit exactly on both cut planes).
+    var count0 = tris.length;
+    function ringIdx(tG, j9) {
+      if (tG >= plan9.length) return rimFn9(j9 % PTS);
+      return base9 + off9[tG - 1] + (j9 % plan9[tG - 1]);
     }
-  var nSrc = QDS * (2 * nRs - 1);
+    function ringN(tG) { return tG >= plan9.length ? PTS : plan9[tG - 1]; }
+    function emit(a9, b9, c9) { if (flip9) tris.push([a9, c9, b9]); else tris.push([a9, b9, c9]); }
+    var n1 = ringN(1), lim1 = symQ ? n1 / 4 : n1;
+    for (var jH = 0; jH < lim1; jH++) emit(cI9, ringIdx(1, jH), ringIdx(1, (jH + 1)));
+    for (var tG = 1; tG < plan9.length; tG++) {
+      var nI = ringN(tG), nO = ringN(tG + 1);
+      var limI = symQ ? nI / 4 : nI, limO = symQ ? nO / 4 : nO;
+      // zipper on integer PARAMETER u = j*PTS/n (monotone, shared endpoints in symQ)
+      var iI9 = 0, iO9 = 0;
+      while (iI9 < limI || iO9 < limO) {
+        var uIn = (iI9 + 1) * PTS / nI, uOn = (iO9 + 1) * PTS / nO;
+        var advO = (iI9 >= limI) || (iO9 < limO && uOn <= uIn + 1e-9);
+        if (advO) { emit(ringIdx(tG + 1, iO9), ringIdx(tG + 1, iO9 + 1), ringIdx(tG, Math.min(iI9, limI - (symQ ? 0 : 0)))); iO9++; }
+        else { emit(ringIdx(tG, iI9), ringIdx(tG + 1, Math.min(iO9, limO)), ringIdx(tG, iI9 + 1)); iI9++; }
+      }
+    }
+    return tris.length - count0;
+  }
+  if (graded) {
+    nSrc = gradedDiscTris(srcBase, offS, planS, cSrc, function (j9) { return IN(0, j9); }, false);
+  } else {
+    for (var jS = 0; jS < QDS; jS++) tris.push([cSrc, SR(1, jS), SR(1, jS + 1)]);
+    for (var tS = 1; tS < nRs; tS++)
+      for (var jS2 = 0; jS2 < QDS; jS2++) {
+        tris.push([SR(tS, jS2), SR(tS + 1, jS2), SR(tS + 1, jS2 + 1)]);
+        tris.push([SR(tS, jS2), SR(tS + 1, jS2 + 1), SR(tS, jS2 + 1)]);
+      }
+    nSrc = QDS * (2 * nRs - 1);
+  }
   // 2) channel wall 0..M-1 (entry 91: was 1..M-1, the off-by-one's other half)
   for (var iC = 0; iC < M - 1; iC++)
     for (var jC = 0; jC < QDS; jC++) {
@@ -3251,13 +3327,17 @@ function buildBEMProject(horn, prof, ringsOv, opts) {
       tris.push([OUT(iO, jO), OUT(iO + 1, jO + 1), OUT(iO + 1, jO)]);
       tris.push([OUT(iO, jO), OUT(iO, jO + 1), OUT(iO + 1, jO + 1)]);
     }
-  // 5) back disc on outer ring 0
-  for (var jB = 0; jB < QDS; jB++) tris.push([cBack, BR(1, jB + 1), BR(1, jB)]);
-  for (var tB = 1; tB < nRb; tB++)
-    for (var jB2 = 0; jB2 < QDS; jB2++) {
-      tris.push([BR(tB, jB2), BR(tB + 1, jB2 + 1), BR(tB + 1, jB2)]);
-      tris.push([BR(tB, jB2), BR(tB, jB2 + 1), BR(tB + 1, jB2 + 1)]);
-    }
+  // 5) back disc on outer ring 0 (entry 128: graded on the budget path)
+  if (graded) {
+    gradedDiscTris(backBase, offB, planB, cBack, function (j9) { return OUT(0, j9); }, true);
+  } else {
+    for (var jB = 0; jB < QDS; jB++) tris.push([cBack, BR(1, jB + 1), BR(1, jB)]);
+    for (var tB = 1; tB < nRb; tB++)
+      for (var jB2 = 0; jB2 < QDS; jB2++) {
+        tris.push([BR(tB, jB2), BR(tB + 1, jB2 + 1), BR(tB + 1, jB2)]);
+        tris.push([BR(tB, jB2), BR(tB, jB2 + 1), BR(tB + 1, jB2 + 1)]);
+      }
+  }
   // global orientation: outward normals -> positive enclosed volume
   var vol = 0, f;
   for (f = 0; f < tris.length; f++) {
@@ -3728,7 +3808,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
 
   /* ================= state ================= */
   var S = {
-    family: "jmlc", fc: 400, throatD: 35.56, entryDeg: 0, T0: 0.7, trunc: 175, aplat: 4, ellMu: 0.88, ellSigma: 0.53, decoupeN: 0.3, decoupeP: 11, throatShape: "round", lipStyle: "round", bemF: 20000, bemSym: "full", dirOv: false, ribW: 0, ribH: 0, ribL: 0, exitLen: 0, exitDeg: 10, plateT: 0, plateD: 0, boltN: 0, boltCircleD: 0, boltHoleD: 0, boltRot: 0,
+    family: "jmlc", fc: 400, throatD: 35.56, entryDeg: 0, T0: 0.7, trunc: 175, aplat: 4, ellMu: 0.88, ellSigma: 0.53, decoupeN: 0.3, decoupeP: 11, throatShape: "round", lipStyle: "round", bemF: 14333, bemSym: "full", dirOv: false, ribW: 0, ribH: 0, ribL: 0, exitLen: 0, exitDeg: 10, plateT: 0, plateD: 0, boltN: 0, boltCircleD: 0, boltHoleD: 0, boltRot: 0,
     petf: false, petfPreset: "off", petfShape: "exp", petfRef: "throat", Tadd: 3.5, fmult: 3, sOff: 0,
     fins: "off", shell: "uniform", finT: 10, adaptL: 25, wnUL: 0.5, wnUC: 0.68, showConstr: false, wnFins: 0, wnFinT: 1.0, wnClear: 0.4, wnFinU1: 0.7,
     aspect: 1.0, section: "ellipse", cornerR: 60, covH: 90, covV: 40, f0: 800, osK: 1.0, osS: 0.7, osN: 4, seN: 2.5, spProj: "flat", f0V: 0, TaddV: 0.4, fmultV: 2, rosR: 130, rosA: 39, rosA0: 7.5, rosK: 1.8, rosRr: 0.3, rosB: 0.3, rosM: 0.8, rosQ: 3.7, flareR: 20, flareWrap: 0, thick: 5
@@ -4340,7 +4420,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       '<select class="psel" id="bemSymSel" aria-label="BEM symmetry" style="margin-bottom:4px">' +
       [["full", "BEM: full mesh (no symmetry)"], ["quarter", "BEM: quarter mesh (2 symmetry planes, ~4\u00d7 fewer elements, much faster solves)"]].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === (S.bemSym || "full") ? " selected" : "") + '>' + o[1] + "</option>"; }).join("") + '</select>' +
       '<select class="psel" id="bemFSel" aria-label="BEM mesh density" style="margin-bottom:4px">' +
-      [["20000", "BEM mesh: \u03bb/6 to 20 kHz (fast sims)"], ["40000", "BEM mesh: \u03bb/6 to 40 kHz"], ["90000", "BEM mesh: \u03bb/6 to 90 kHz (finest)"]].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === String(S.bemF || 20000) ? " selected" : "") + '>' + o[1] + "</option>"; }).join("") + '</select>' +
+      [["14333", "BEM mesh: 4 mm quality \u2014 recommended (usable to ~20 kHz)"], ["20000", "BEM mesh: 2.9 mm \u2014 \u03bb/6 @ 20 kHz"], ["40000", "BEM mesh: 1.4 mm \u2014 \u03bb/6 @ 40 kHz"]].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === String(S.bemF || 14333) ? " selected" : "") + '>' + o[1] + "</option>"; }).join("") + '</select>' +
       '<button class="btn" id="exAkabak" style="border-color:var(--ink)">AKABAK BEM MESH (.msh)</button>' +
       '<button class="btn" id="exNurbs">STEP (NURBS SURFACE)</button>' +
       '<button class="btn" id="exStl">STL SOLID + ROUNDOVER</button>' +
@@ -4554,8 +4634,8 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
         var perX9 = 2 * Math.PI * Math.sqrt((aM9 * aM9 + bM9 * bM9) / 2);
         var arcOf9 = function (wq) { var s9 = 0; for (var i9 = 1; i9 < wq.length; i9++) { var A9 = wq[i9 - 1], B9 = wq[i9]; s9 += Math.hypot((B9.z !== undefined ? B9.z : B9[0]) - (A9.z !== undefined ? A9.z : A9[0]), (B9.r !== undefined ? B9.r : B9[1]) - (A9.r !== undefined ? A9.r : A9[1])); } return s9; };
         var pathX9 = Math.max(arcOf9(prof9.H), arcOf9(prof9.V)) || lastAct.axialDepth || 200;
-        var bud9 = (S.bemF || 20000) === 20000 ? 8000 : ((S.bemF || 20000) === 40000 ? 30000 : 120000);
-        var sz9 = bemBandSize(perX9, pathX9, (S.bemF || 20000), bud9);   // entry 114: honest lambda/6 TARGET + a sane per-tier element budget; big horns cap and the note reports the TRUE achieved lambda/6 ceiling
+        var bud9 = (S.bemF || 14333) <= 14333 ? 12000 : ((S.bemF || 14333) === 20000 ? 24000 : 90000);   // entry 128: 4 mm quality default (user: lambda/6 not needed with good element quality)
+        var sz9 = bemBandSize(perX9, pathX9, (S.bemF || 14333), bud9);   // entry 114: honest lambda/6 TARGET + a sane per-tier element budget; big horns cap and the note reports the TRUE achieved lambda/6 ceiling
         var rings9 = null;
         if (S.family === "biradial" && lastAct.fan) rings9 = buildAraiFanRings(lastAct, sz9.segs, 0, 0);
         else if (S.family === "wn" && lastAct.wn) rings9 = buildWNRings(lastAct, sz9.segs, 0, 0);
