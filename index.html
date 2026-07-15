@@ -4722,7 +4722,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
 
   /* ================= UI ================= */
   var PARAMS = [
-    { key: "fc", label: "Cut-off fc", unit: "Hz", min: 150, max: 10000, step: 5, sect: "core", fams: { jmlc: 1, jmlcell: 1, iwata: 1, swh: 1, tractrix: 1, hypex: 1, conical: 1, cd: 1, biradial: 1, wn: 1 } },
+    { key: "fc", label: "Cut-off fc", unit: "Hz", min: 80, max: 10000, step: 5,   /* entry 149: user request "100 Hz or less" -- all prof families verified stable at 80 */ sect: "core", fams: { jmlc: 1, jmlcell: 1, iwata: 1, swh: 1, tractrix: 1, hypex: 1, conical: 1, cd: 1, biradial: 1, wn: 1 } },
     { key: "throatD", label: "Throat \u00d8", unit: "mm", min: 4, max: 120, step: 0.01, sect: "core" },   // entry 89: forum request, tiny horns (3 cm tractrix, 5 mm throats)
     { key: "ribW", label: "Rect throat W", unit: "mm", min: 0, max: 320, step: 0.5, sect: "core", fams: { jmlc: 1, jmlcell: 1, swh: 1, tractrix: 1, hypex: 1, conical: 1, cd: 1, os: 1, osc: 1, rosse: 1 } },
     { key: "ribH", label: "Rect throat H", unit: "mm", min: 0, max: 320, step: 0.5, sect: "core", fams: { jmlc: 1, jmlcell: 1, swh: 1, tractrix: 1, hypex: 1, conical: 1, cd: 1, os: 1, osc: 1, rosse: 1 } },
@@ -4855,7 +4855,8 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     var side = '<div class="sect">PROFILE FAMILY</div>' +
       '<select class="psel" id="familySel" aria-label="Profile family">' +
       Object.keys(FAMILY_NAMES).map(function (k) { return '<option value="' + k + '"' + (k === S.family ? " selected" : "") + '>' + FAMILY_NAMES[k] + '</option>'; }).join("") +
-      '</select>';
+      '</select>' +
+      '<button class="btn" id="famDefBtn" style="font-size:9px;margin:2px 0 6px" title="Reset every parameter to this family\u2019s reference defaults">FAMILY DEFAULTS</button>';
     var i;
     // entry 94: the throat SHAPE select renders directly ABOVE the throat dimension
     // params (shape first, then size); rectangle replaces round entirely (throatD
@@ -4948,8 +4949,24 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
         S[p.key] = vc; num.value = vc; rng.value = vc;   // the displayed value IS the effective value
         scheduleUpdate();
       }
-      num.addEventListener("input", function () { set(parseFloat(num.value)); });
-      rng.addEventListener("input", function () { set(parseFloat(rng.value)); });
+      function markAndSet(v9) {
+        if (!S._touched) S._touched = {}; S._touched[p.key] = 1;
+        set(v9);
+        // entry 149 (SA8535 user: "I was expecting the flare calculations to
+        // use the equivalent throat diameter"): changing the ribbon dims
+        // auto-matches the throat to the area-equivalent -- the LAW follows
+        // the ribbon; manual throatD edits afterwards still win (and warn).
+        if ((p.key === "ribW" || p.key === "ribH") && S.ribW > 0 && S.ribH > 0) {
+          var eqD9 = 2 * Math.sqrt(S.ribW * S.ribH / Math.PI);
+          S.throatD = Math.round(eqD9 * 100) / 100;
+          var nT9 = document.getElementById("num_throatD"), rT9 = document.getElementById("rng_throatD");
+          if (nT9) nT9.value = S.throatD;
+          if (rT9) rT9.value = S.throatD;
+          if (S._touched) delete S._touched.throatD;
+        }
+      }
+      num.addEventListener("input", function () { markAndSet(parseFloat(num.value)); });
+      rng.addEventListener("input", function () { markAndSet(parseFloat(rng.value)); });
     });
     // Per-family reference defaults, applied on family switch (2026-07-13; replaces a
     // conical-only entryDeg hack that STUCK at 15 when leaving conical -- jmlc's canonical
@@ -4971,15 +4988,36 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       wn:       { throatD: 25.4, fc: 600, T0: 0.7, wnUL: 0.5, wnUC: 0.68, wnFins: 0, wnFinT: 1.0, wnClear: 0.4, wnFinU1: 0.7, flareR: 0, flareWrap: 0, cornerR: 0 }, // 1-inch reference   // Classic OS (Geddes 1989); covV != covH = elliptical; default roll = the printed-waveguide curl (G2, 180 deg)
       rosse:    { rosR: 130, rosA: 39, rosA0: 7.5, rosK: 1.8, rosRr: 0.3, rosB: 0.3, rosM: 0.8, rosQ: 3.7 } // the ST260 paper reference
     };
-    document.getElementById("familySel").addEventListener("change", function (e) {
-      S.family = e.target.value;
+    var SHARED_KEEP = { fc: 1, throatD: 1, covH: 1, covV: 1, T0: 1 };   // entry 149 (user: "Please dont reset params e.g. Cut off when changing horn profile")
+    function applyFamilyDefaults(force9) {
       var fd = FAMILY_DEFAULTS[S.family] || {};
       for (var dk in fd) {
+        if (!force9 && SHARED_KEEP[dk] && S._touched && S._touched[dk]) continue;   // the user set it; comparing profiles at constant inputs is the whole point
         S[dk] = fd[dk];
         var nEl = document.getElementById("num_" + dk), rEl = document.getElementById("rng_" + dk);
         if (nEl) nEl.value = fd[dk];
         if (rEl) rEl.value = fd[dk];
       }
+    }
+    document.getElementById("familySel").addEventListener("change", function (e) {
+      S.family = e.target.value;
+      applyFamilyDefaults(false);
+      syncSymEligibility();   // entry 149 (Thommy: quarter silently fell back to full for WN)
+      scheduleUpdate();
+    });
+    function syncSymEligibility() {
+      var sy9 = document.getElementById("bemSymSel");
+      if (!sy9) return;
+      var rings9 = (S.family === "wn" || S.family === "biradial");
+      sy9.disabled = rings9;
+      sy9.title = rings9 ? "Quarter symmetry is not available for WN/biradial (the mouth wrap crosses the cut planes) -- full mesh is exported" : "";
+      if (rings9) { S.bemSym = "full"; sy9.value = "full"; }
+    }
+    syncSymEligibility();
+    var fdB = document.getElementById("famDefBtn");
+    if (fdB) fdB.addEventListener("click", function () {
+      applyFamilyDefaults(true);   // explicit reset, the user asked for a button instead of surprises
+      S._touched = {};
       scheduleUpdate();
     });
     document.getElementById("petfSel").addEventListener("change", function (e) {
