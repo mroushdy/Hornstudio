@@ -1,80 +1,120 @@
-# Horn Studio — sources and implementation notes
+# Horn Studio — Provenance & Attribution
 
-Horn Studio is an independent implementation. It is not affiliated with or
-endorsed by any author or designer listed below. Implementations marked
-"published equations" follow the primary source directly; those marked
-"reconstruction" are independent interpretations calibrated or verified
-against public reference material.
+Horn Studio is an independent, free, non-commercial tool (CC BY-NC 4.0). Every
+implementation in it was written originally for this project. This document
+records the *scientific provenance* of the methods it implements: which
+published research each horn family and numerical procedure derives from, and
+which constructions are Horn Studio's own.
 
-## Profile families
+No third-party source code of any kind is included in, or was used to build,
+Horn Studio. Where a method derives from published research, the derivation
+was made from the publication itself — equations, figures, profile plots, and
+public statements — and is credited below and in the source code at the point
+of implementation. The tool's complete, timestamped development log is
+preserved and documents this history.
 
-**JMLC isophase** — published equations. Jean-Michel Le Cléac'h's isophase
-construction: curved wavefronts advanced along wall normals carrying the
-hyperbolic-exponential area law; the roll past 180° is the native termination.
+---
 
-**Spherical-wave / Kugelwellen (+ EWF elliptical variant)** — published
-equations. Klangfilm-lineage spherical-wave construction; hypex area law
-evaluated on spherical caps.
+## Classic horn theory
 
-**Tractrix** — published closed form; mouth radius from rm = c/(2π·fc).
+- **Exponential / hyperbolic-exponential (hypex) family** — V. Salmon,
+  *A New Family of Horns* / generalized hypex horn theory (JASA, 1946).
+  Implemented from the published plane-wavefront area laws.
+- **Tractrix** — P. G. A. H. Voigt (patent, 1927) and the classical tractrix
+  curve. The implementation follows the classical equations; the code comments
+  also reference the exposition of these equations on sphericalhorns.net
+  (equations 3–4 of that presentation) which was used as a working reference
+  for notation.
+- **Webster horn equation & transmission-matrix response** — A. G. Webster
+  (1919); the practical transmission-matrix treatment follows the horn
+  literature as surveyed by B. Kolbrek (*Horn Theory: An Introduction*,
+  audioXpress, 2008).
+- **Conical horn** — classical.
 
-**Hyperbolic-exponential (hypex)** — Salmon's family, published equations.
+## Named modern constructions
 
-**Conical** — elementary.
+- **JMLC** — Jean-Michel Le Cléac'h's published horn profile construction.
+- **Kugelwellen / spherical-wave (SWH)** — the Klangfilm tradition
+  (W. Rösch et al.); implemented from the published spherical-wavefront
+  construction.
+- **Constant-directivity (CD) and bi-radial** — D. B. Keele, Jr.,
+  *What's So Sacred About Exponential Horns?* (AES, 1975) and the CD horn
+  papers (AES, 1982).
+- **Oblate spheroidal (OS / OS-SE)** — E. Geddes, *Acoustic Waveguide Theory*
+  (JAES, 1989).
+- **R-OSSE** — implemented from the published R-OSSE profile definition by
+  Marcel Batík (at-horns.eu).
+- **Arai-inspired biradial** — reconstructed from published drawings and
+  photographs of the Arai A-290 series; calibration documented in the
+  development log.
+- **Iwata** — reconstructed from the published Iwata drawings and profile
+  data; the decode process is documented in the development log.
 
-**Constant-directivity (Keele 1975)** — reconstruction from D.B. Keele's CD
-horn preprint, validated against Electro-Voice HR-series hardware dimensions.
+## Methods derived from the published work of Dr. Bernd Ahlswede (sphericalhorns.net)
 
-**Keele 1982 Bi-Radial** — reconstruction anchored to the patent's exemplary
-embodiment table.
+The following features implement or reconstruct methods from Dr. Ahlswede's
+*published* research. They are credited in the source at each implementation
+site. His current models are private, are not represented in Horn Studio, and
+nothing here makes any claim about them.
 
-**OS / OS-SE** — published equations. Earl Geddes' oblate-spheroidal waveguide
-(JAES 1989); OS-SE superellipse termination per Marcel Batík's published ATH
-material.
+- **PETF (progressive expansion / T-factor modification)** — implemented from
+  the equations published on sphericalhorns.net (equations 1–2 of that
+  presentation). Validation was performed against the four published reference
+  profiles, and the published BEM results were used as a catalogued
+  cross-check of the loading cost. (Rollback treatment was dropped following
+  his public 2025 remark that it is approximately equivalent to a small mouth
+  roundover.)
+- **HVDiff (per-plane PETF laws)** — implemented from the May 2021
+  publication on sphericalhorns.net describing different PETF recipes for the
+  horizontal and vertical planes, with the published BEM quantification used
+  as the behavioral reference.
+- **Wide-format HVDiff (azimuthal loft)** — the observable construction rules
+  (loft termination at the fastest azimuth's completed mouth; truncation of
+  slower azimuths at that arc length) were *inferred from the published No.1 /
+  No.2 profile plots and the publicly shown mk-series shapes*. The development
+  log documents this inference, including an initial incorrect implementation
+  corrected against the published figures. The cos² azimuthal blending of the
+  per-plane recipes is Horn Studio's own implementation choice and appears in
+  no source.
 
-**R-OSSE** — published parametric formula (Marcel Batík).
+## Horn Studio's own constructions
 
-**PETF variable-T profiles** — published ATH-lineage progressive-expansion
-technique; per-plane blending is an independent extension.
+- **William Neile–inspired (WN) equal-path biradial** — an original
+  construction of this project: a Neile semicubical-parabola (z^1.5)
+  horizontal law (W. Neile, 1657, the first rectification of the semicubical
+  parabola), a C2 quintic vertical law, and a numerically solved equal-path
+  trajectory family. It is *not* derived from any WN-series design published
+  elsewhere; comparisons against published third-party polar measurements
+  were used only as benchmarks, and the development log records that policy
+  explicitly.
+- **H coverage lock** (smooth-min slope blending into a conical phase with an
+  exact-mouth tangent fillet), **V coverage / diffraction-slot law**
+  (combined-curve slope blend with exponential growth), **graded BEM meshing**
+  (two-band adaptive density, master-grid column-map subsampling,
+  quarter-symmetry machinery), the **equal-path solver**, and the **surface-
+  frame mouth-wrap construction** are original to Horn Studio.
 
-**Arai-optimized biradial** — reconstruction from Yuichi Arai's public plans,
-book tables, and the openly published A-290 reference geometry, including the
-five-cell rule, throat array radius, fin layouts, and driver adapter.
+## Numerical engine
 
-**William Neile-inspired biradial** — independent parametric reconstruction of
-the curved equal-path, acoustic-loading-optimized ideas published in the
-William Neile article series on SphericalHorns.net. Fully parametric: throat
-diameter, cutoff frequency, T (hypex parameter), and the loading-zone extent
-are free inputs. The horizontal is a cone plus a true Neile z^1.5 term
-(William Neile, 1657 — the first rectification of the semicubical parabola)
-with a C1 Hermite terminal flare; the vertical is solved from the hypex
-loading law at the requested fc and T through the loading zone, then continued
-to the mouth by a single C2 quintic (position, slope, and curvature matched at
-the join). Every horizontal trajectory is numerically solved to identical arc
-length (max error ~1e-13 mm), producing the curved mouth characteristic of the
-construction (the center reaches further than the outer edges). Optional fins
-follow members of the same equal-path trajectory family as individually
-watertight solids with adjustable span, thickness, clearance, and tapered
-edges; when fins are enabled, the loading law targets the OPEN area — blocked
-area is compensated in the vertical solve. Mouth area and equivalent diameter
-are reported from the curved construction wavefront, not a flat-section
-approximation. The 3-D viewer can overlay the equal-path trajectories and
-construction wavefronts.
+- **NumCalc** — the BEM solver is NumCalc from the open-source **Mesh2HRTF**
+  project (Ziegelwanger, Majdak, Kreuzer et al.), compiled to WebAssembly for
+  in-browser use, and used unmodified in native form for export targets. Used
+  under its open-source license with attribution.
+- Mie-series analytical validation, mesh-quality methodology, and the export
+  pipelines are original to Horn Studio.
 
-The two published reference geometries (1-inch/600 Hz and 1.4-inch/300 Hz) are
-used ONLY as verification anchors in the automated test suite: mouths
-reproduced exactly; path length within 0.1%; wall-profile RMS ≈ 1–2%. The
-verified throat-ratio interval is flagged, and configurations beyond it are
-marked as extrapolated. It is not the original private calculator and uses no
-unpublished formulas.
+## Terminology
 
-## Theory and background
+The terms and notations **PETF**, **HVDiff**, and the designation of
+**"William Neile horns"** as a loudspeaker-horn category originate in the
+published work of Dr. Bernd Ahlswede (sphericalhorns.net), and are used here
+with his kind permission to use his original terms and notations. This
+acknowledgment concerns naming and vocabulary only; it implies no restriction
+on, and makes no claim about, the independent implementations documented
+above. Per-term links to the corresponding articles will be added using
+Dr. Ahlswede's preferred references.
 
-- Bjørn Kolbrek — horn theory series and historical documentation.
-- A.G. Webster — the horn equation used for the throat-impedance estimates
-  (a 1-D estimate; not a substitute for BEM).
+---
 
-## License
-
-CC BY-NC 4.0 — see LICENSE. Free for non-commercial use with attribution;
-commercial use requires written permission.
+*Corrections or preferred citations from any researcher named here are
+welcome and will be incorporated.*
