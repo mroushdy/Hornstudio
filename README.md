@@ -1,5 +1,9 @@
 # Horn Studio — Provenance & Attribution
 
+*Maintained (Silence Please, New York). Version 1.0, 16 July 2026.
+This document is part of the repository and is updated whenever a method,
+citation, or credit changes; corrections are incorporated with acknowledgment.*
+
 Horn Studio is an independent, free, non-commercial tool (CC BY-NC 4.0). Every
 implementation in it was written originally for this project. This document
 records the *scientific provenance* of the methods it implements: which
@@ -117,4 +121,6 @@ Dr. Ahlswede's preferred references.
 ---
 
 *Corrections or preferred citations from any researcher named here are
-welcome and will be incorporated.*
+welcome and will be incorporated. The radial-flare mouth treatment in the WN
+family follows a suggestion by Dr. B. Ahlswede (July 2026), acknowledged with
+thanks.*
