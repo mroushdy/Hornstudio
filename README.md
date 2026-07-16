@@ -83,14 +83,26 @@ nothing here makes any claim about them.
 
 ## Horn Studio's own constructions
 
-- **William Neile–inspired (WN) equal-path biradial** — an original
-  construction of this project: a Neile semicubical-parabola (z^1.5)
-  horizontal law (W. Neile, 1657, the first rectification of the semicubical
-  parabola), a C2 quintic vertical law, and a numerically solved equal-path
-  trajectory family. It is *not* derived from any WN-series design published
-  elsewhere; comparisons against published third-party polar measurements
-  were used only as benchmarks, and the development log records that policy
-  explicitly.
+- **William Neile biradial (equal-path)** — the implementation is an
+  original construction of this project: a Neile semicubical-parabola (z^1.5)
+  horizontal law, a C2 quintic vertical law, and a numerically solved
+  equal-path trajectory family, none of it derived from any published
+  WN-series design; comparisons against published third-party polar
+  measurements were used only as benchmarks, and the development log records
+  that policy explicitly. The *class itself*, however, has an author: the use
+  of Neile's semicubical parabola (W. Neile, 1657, the first rectification of
+  the curve) as a loudspeaker-horn profile, together with the equal-path-
+  length principle applied to each parabola, was introduced by **Dr. Bernd
+  Ahlswede** — [*William Neile Horns*, sphericalhorns.net, September 2021](https://sphericalhorns.net/2021/09/15/william-neile-horns/)
+  — creating a new class of horns, of which this family is an independent
+  member. His published work on this class inspired and benchmarked this
+  family in the same way the JMLC method has inspired later work, including
+  his own. The family is accordingly named "William Neile biradial" in the
+  tool — adopting the class name he coined — rather than the earlier hedge
+  "William Neile–inspired"; likewise the Arai reconstruction is named
+  "Yuichi biradial (after Arai)", the standard convention for a faithful
+  implementation of a published design, calibrated to the A-290 book
+  figures.
 - **H coverage lock** (smooth-min slope blending into a conical phase with an
   exact-mouth tangent fillet), **V coverage / diffraction-slot law**
   (combined-curve slope blend with exponential growth), **graded BEM meshing**
