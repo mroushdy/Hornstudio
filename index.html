@@ -2527,26 +2527,75 @@ function buildDriverPlate(rt, outerR, T, boltN, bcR, holeR, z0, boreTopR, borePr
 // then a C1 Hermite blend over the next exLen into the family wall. The law
 // is locally overridden (standard practice -- the driver's own exit defines
 // this region); everything past 2*exLen is untouched.
-function straightEntry(wall, rt, exDeg, exLen) {
+function osVirtualEntry(wall, rt, exDeg, exLen, cov) {
+  // entry 184 (forum report: Classic OS + straight driver entry rippled in
+  // CAD). The generic graft is GEOMETRICALLY DOOMED on the OS: the straight
+  // segment lands BELOW the OS wall, and any C1 catch-up to a 45-degree-
+  // asymptote curve must overshoot the asymptote (measured 48.5 deg peak +
+  // slope reversals -- the reporter's Fusion ripples were ours). Geddes' own
+  // construction instead: re-solve the OS with a VIRTUAL ORIGIN so the
+  // waveguide itself starts at the driver angle -- r(z) = sqrt(rc^2 +
+  // ((z + z0) tan th)^2), z0 = r1 tanA / tan^2 th, rc^2 = r1^2 (1 - tan^2 A
+  // / tan^2 th): r(exLen) = r1 and r'(exLen) = tanA exactly. C1 at the
+  // junction by construction, slope monotone from the driver angle to the
+  // coverage asymptote, overshoot impossible.
   if (!(exLen > 0) || !wall || wall.length < 8) return wall;
   var tanA = Math.tan(exDeg * Math.PI / 180);
-  var zB = 2 * exLen, out = [], i;
-  // family wall state at the blend end
-  var iB = 0;
-  while (iB < wall.length - 2 && wall[iB].z < zB) iB++;
-  var rB = wall[iB].r;
-  var dzB = wall[Math.min(wall.length - 1, iB + 3)].z - wall[Math.max(0, iB - 3)].z;
-  var sB = dzB > 1e-9 ? (wall[Math.min(wall.length - 1, iB + 3)].r - wall[Math.max(0, iB - 3)].r) / dzB : 0;
-  var r1 = rt + tanA * exLen;                      // straight segment end
+  var th = Math.min(70, Math.max(15, cov / 2)) * Math.PI / 180;
+  var tth = Math.tan(th);
+  if (tanA >= tth * 0.98) return straightEntry(wall, rt, exDeg, exLen);
+  var r1 = rt + tanA * exLen;
+  var z0 = r1 * tanA / (tth * tth);
+  var rc2 = r1 * r1 * (1 - (tanA * tanA) / (tth * tth));
+  var rEnd = wall[wall.length - 1].r;
+  var out = [], i, zq;
+  for (i = 0; i < wall.length && wall[i].z <= exLen; i++) out.push({ z: wall[i].z, r: rt + tanA * wall[i].z });
+  var zEnd2 = (Math.sqrt(Math.max(1, rEnd * rEnd - rc2)) / tth) - z0 + exLen;
+  var n2 = Math.max(60, wall.length - out.length);
+  for (i = 1; i <= n2; i++) {
+    zq = exLen + (zEnd2 - exLen) * i / n2;
+    out.push({ z: zq, r: Math.sqrt(rc2 + Math.pow((zq - exLen + z0) * tth, 2)) });
+  }
+  return out;
+}
+function straightEntry(wall, rt, exDeg, exLen) {
+  if (!(exLen > 0) || !wall || wall.length < 8) return wall;
+  // entry 184: adaptive blend length + physical-width slope stencil +
+  // Fritsch-Carlson tangent clamp (the fixed 2*exLen cubic overshot into
+  // steep family walls). For the Classic OS specifically the app routes to
+  // osVirtualEntry above -- this generic graft remains for shallow-throat
+  // families where it is well-conditioned.
+  var tanA = Math.tan(exDeg * Math.PI / 180);
+  var r1 = rt + tanA * exLen;
+  function slopeAt9(iq) {
+    var span = Math.max(1, exLen / 3);
+    var iL = iq, iR = iq;
+    while (iL > 0 && wall[iq].z - wall[iL].z < span) iL--;
+    while (iR < wall.length - 1 && wall[iR].z - wall[iq].z < span) iR++;
+    var dz = wall[iR].z - wall[iL].z;
+    return dz > 1e-9 ? (wall[iR].r - wall[iL].r) / dz : 0;
+  }
+  var zB = 2 * exLen, iB = 0, sB = 0, rB = r1, g9;
+  for (g9 = 0; g9 < 40; g9++) {
+    iB = 0;
+    while (iB < wall.length - 2 && wall[iB].z < zB) iB++;
+    rB = wall[iB].r; sB = slopeAt9(iB);
+    var avg = (rB - r1) / Math.max(1e-9, wall[iB].z - exLen);
+    if (avg <= Math.max(tanA * 1.05, 0.98 * sB) || zB > exLen + 6 * exLen) break;
+    zB += 0.5 * exLen;
+  }
+  var span9 = wall[iB].z - exLen;
+  var avg9 = (rB - r1) / Math.max(1e-9, span9);
+  var m0 = Math.min(tanA, 3 * avg9), m1 = Math.min(sB, 3 * avg9);
+  var out = [], i;
   for (i = 0; i < wall.length; i++) {
     var z = wall[i].z;
     if (z <= exLen) out.push({ z: z, r: rt + tanA * z });
-    else if (z < zB) {
-      var t = (z - exLen) / exLen, h = t * t * (3 - 2 * t);
-      // Hermite: value + slope continuity at both ends
+    else if (z < wall[iB].z) {
+      var t = (z - exLen) / span9;
       var t2 = t * t, t3 = t2 * t;
       var h00 = 2 * t3 - 3 * t2 + 1, h10 = t3 - 2 * t2 + t, h01 = -2 * t3 + 3 * t2, h11 = t3 - t2;
-      out.push({ z: z, r: h00 * r1 + h10 * exLen * tanA + h01 * rB + h11 * exLen * sB });
+      out.push({ z: z, r: h00 * r1 + h10 * span9 * m0 + h01 * rB + h11 * span9 * m1 });
     } else out.push(wall[i]);
   }
   return out;
@@ -4799,7 +4848,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     // straight driver-exit entry, prof-path law families only (cd designs its
     // own entry; rings families keep their specialized throats).
     if (S.exitLen > 0 && p9 && p9.H && !p9.azProfiles && S.family !== "cd" && S.family !== "wn" && S.family !== "biradial" && S.family !== "iwata") {
-      p9 = Object.assign({}, p9, { H: straightEntry(p9.H, p9.H[0].r, S.exitDeg / 2, S.exitLen), V: straightEntry(p9.V, p9.V[0].r, S.exitDeg / 2, S.exitLen) });
+      p9 = Object.assign({}, p9, S.family === "osc" ? { H: osVirtualEntry(p9.H, p9.H[0].r, S.exitDeg / 2, S.exitLen, S.covH || 90), V: osVirtualEntry(p9.V, p9.V[0].r, S.exitDeg / 2, S.exitLen, S.covV || S.covH || 90) } : { H: straightEntry(p9.H, p9.H[0].r, S.exitDeg / 2, S.exitLen), V: straightEntry(p9.V, p9.V[0].r, S.exitDeg / 2, S.exitLen) });
     }
     return p9;
   }
