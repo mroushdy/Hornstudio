@@ -1424,7 +1424,14 @@ function wnWall(P) {
            horizontalWallArcLength: prof.L, axialDepth: prof.zOuter[prof.zOuter.length - 1],
            finalAxialZ: prof.zOuter[prof.zOuter.length - 1] };
 }
-function surfaceFrameLip(pos, M0, segs, flareR, wrapDeg, FS) {
+function surfaceFrameLip(pos, M0, segs, flareR, wrapDeg, FS, flareRV) {
+  // entry 186: PER-PLANE ROLL RADII. The V pattern diffracts from the TOP and
+  // BOTTOM rim edges, the H pattern from the SIDES -- so a deep side roll with
+  // a shallow top/bottom roll contains H while leaving the V edges
+  // acoustically near-bare at low frequency (the WN300ALO-style combination:
+  // wide 1 kHz V with wall-controlled 2 kHz). Per azimuth: r(phi) =
+  // flareR cos^2 phi + flareRV sin^2 phi from the rim point's own normalized
+  // lateral position. flareRV omitted or equal -> exactly the old behavior.
   // entry 179 (factored from buildWNRings, entries 167 + 170): the SURFACE-FRAME
   // LIP -- per-azimuth independent rollback. Frames from the true local surface
   // (T x rim-tangent, ONE global sign), spiral launch (radial flare, no knee).
@@ -1479,6 +1486,28 @@ function surfaceFrameLip(pos, M0, segs, flareR, wrapDeg, FS) {
       return [v[0] / L9, v[1] / L9, v[2] / L9];
     }
     for (var j3 = 0; j3 < segs; j3++) {
+      var rj9 = flareR, turnScale9 = 1;
+      if (flareRV !== undefined && flareRV !== null && Math.abs(flareRV - flareR) > 1e-9) {
+        // entry 187: PER-PLANE WRAP TAPER (the radius-blend v1 was geometrically
+        // doomed: any small radius turning the full wrap FOLDS back with an air
+        // gap thinner than any affordable element -- the flareRV-8 run leaked at
+        // -2.6 dB rear and the verdict system then invalidated the flareRV-20
+        // revision too, ratio 0.94). The fold comes from the TURN, not the
+        // radius: taper the WRAP at the top/bottom edges instead. Radius stays
+        // flareR everywhere (the validated 0.46 regime); the top's turn shrinks
+        // to (flareRV / flareR) of the full wrap -- a <= 90-degree turn never
+        // doubles back, so there is NO fold and NO thin gap at any density,
+        // while a ~30-degree relief is acoustically near-bare at 1 kHz.
+        var kRim9x = ((M0 - 1) * segs) * 3;
+        var mxX9 = 0, mxY9 = 0;
+        for (var q9x = 0; q9x < segs; q9x++) { mxX9 = Math.max(mxX9, Math.abs(pos[kRim9x + q9x * 3 + 1])); mxY9 = Math.max(mxY9, Math.abs(pos[kRim9x + q9x * 3 + 2])); }
+        var kThis9 = ((M0 - 1) * segs + j3) * 3;
+        var nx9 = Math.abs(pos[kThis9 + 1]) / Math.max(1e-9, mxX9), ny9 = Math.abs(pos[kThis9 + 2]) / Math.max(1e-9, mxY9);
+        var p9r = 4;
+        var wV9 = Math.pow(ny9, p9r) / Math.max(1e-12, Math.pow(nx9, p9r) + Math.pow(ny9, p9r));
+        var frac9 = Math.max(0.12, Math.min(1, flareRV / Math.max(1e-9, flareR)));
+        turnScale9 = (1 - wV9) + wV9 * frac9;
+      }
       var Pm = Pms[j3], Tm2 = smV(Traw, j3), N4 = smV(Nraw, j3);
       var dNT = N4[0] * Tm2[0] + N4[1] * Tm2[1] + N4[2] * Tm2[2];
       N4 = [N4[0] - dNT * Tm2[0], N4[1] - dNT * Tm2[1], N4[2] - dNT * Tm2[2]];
@@ -1496,10 +1525,10 @@ function surfaceFrameLip(pos, M0, segs, flareR, wrapDeg, FS) {
       var lipU9 = [0], lipV9 = [0], lipA9 = [0];
       for (var sp9 = 1; sp9 <= NSp9; sp9++) {
         var fr9 = sp9 / NSp9;
-        var kap9 = (fr9 < ease9 ? fr9 / ease9 : 1) / flareR;
+        var kap9 = (fr9 < ease9 ? fr9 / ease9 : 1) / rj9;
         // arc-length step chosen so the TOTAL turn reaches `wrap`:
         // total turn = integral kappa ds; with the ease, ds_total = wrap*flareR/(1-ease/2)
-        var dsTot9 = wrap * flareR / (1 - ease9 / 2);
+        var dsTot9 = wrap * turnScale9 * rj9 / (1 - ease9 / 2);
         var ds9 = dsTot9 / NSp9;
         u9 += Math.cos(ang9) * ds9;
         v9 += Math.sin(ang9) * ds9;
@@ -1521,7 +1550,7 @@ function surfaceFrameLip(pos, M0, segs, flareR, wrapDeg, FS) {
   }
 }
 
-function buildWNRings(horn, segs, flareR, wrapDeg) {
+function buildWNRings(horn, segs, flareR, wrapDeg, flareRV) {
   // True curved 3-D station rings for the WN family: rounded-rect perimeter per
   // station (corner-pinned per-edge allocation, mouth proportions -- the same
   // feature-aligned scheme that ended the biradial bump saga), axial position per
@@ -1574,7 +1603,7 @@ function buildWNRings(horn, segs, flareR, wrapDeg) {
       pos[k] = zj; pos[k + 1] = pt.x; pos[k + 2] = pt.y;
     }
   }
-  if (FS > 0) surfaceFrameLip(pos, M0, segs, flareR, wrapDeg, FS);
+  if (FS > 0) surfaceFrameLip(pos, M0, segs, flareR, wrapDeg, FS, flareRV);
   return { rings: pos, M: M, segs: segs };
 }
 function wnFinMesh(horn, finT, clear, u0, u1) {
@@ -4285,7 +4314,7 @@ function buildBEMProject(horn, prof, ringsOv, opts) {
   }
   // entry 129: mesh QUALITY REPORT (aspect stats) -- computed here so every
   // export can state its own element quality alongside the lambda/6 honesty.
-  var qUnder2 = 0, qOver8 = 0, qWorst = 0, qf;
+  var qUnder2 = 0, qOver8 = 0, qWorst = 0, qf, totE = 0, nE = 0;
   for (qf = 0; qf < tris.length; qf++) {
     var qA = tris[qf][0] * 3, qB = tris[qf][1] * 3, qC = tris[qf][2] * 3;
     var qe1 = Math.hypot(nodes[qB] - nodes[qA], nodes[qB + 1] - nodes[qA + 1], nodes[qB + 2] - nodes[qA + 2]);
@@ -4293,6 +4322,7 @@ function buildBEMProject(horn, prof, ringsOv, opts) {
     var qe3 = Math.hypot(nodes[qA] - nodes[qC], nodes[qA + 1] - nodes[qC + 1], nodes[qA + 2] - nodes[qC + 2]);
     var qar = Math.max(qe1, qe2, qe3) / Math.max(1e-12, Math.min(qe1, qe2, qe3));
     if (qar < 2) qUnder2++; if (qar > 8) qOver8++; if (qar > qWorst) qWorst = qar;
+    totE += qe1 + qe2 + qe3; nE += 3;   // entry 187: mean edge for the curl verdict
   }
   // global orientation: outward normals -> positive enclosed volume.
   // entry 134: OPEN meshes (infinite-baffle) have no enclosed volume -- orient
@@ -4407,6 +4437,17 @@ function buildBEMProject(horn, prof, ringsOv, opts) {
            fMax: 344000 / (6 * eMax), angles: ang, anglesV: angV, nH: P9, nHornE: nHornE, nFinE: nFinE,
            sym: symQ ? 2 : 0,   // entry 78: 2 = quarter model, NumCalc SYMMETRY "1 1 0" at origin
            qUnder2: qUnder2, qOver8: qOver8, qWorst: qWorst, layout: gradedW ? gradedW.layout : null,
+           // entry 187: CURL RESOLUTION VERDICT -- three calibrated points from
+           // the leak campaign: meanEdge/curlRadius 0.44 = validated (rear -23
+           // dB), 0.81 = leaked, 3.2 = leaked catastrophically and worst at LOW
+           // frequency (the thinner the fold, the lower the leak). Safe
+           // threshold 0.55 with margin. opts.curlRMin = the tightest roll
+           // radius in the geometry; 0/absent = no curl, no verdict.
+           curl: (opts && opts.curlRMin > 0.5) ? (function () {
+             var ratio7 = (totE / nE) / opts.curlRMin;
+             return { rMin: opts.curlRMin, meanEdge: totE / nE, ratio: ratio7,
+                      verdict: ratio7 <= 0.55 ? "resolved" : (ratio7 <= 0.8 ? "MARGINAL" : "UNRESOLVABLE") };
+           })() : null,
            open: gradedW ? gradedW.open : 0, rimSpan: gradedW ? gradedW.rimSpan : 0, capDepth: gradedW ? gradedW.capDepth : 0 };
 }
 // STEP EXPORT (entry 92, forum request). Faceted BREP per the AP214 merged
@@ -5401,7 +5442,8 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     { key: "wnFinT", label: "Fin thickness", unit: "mm", min: 0.6, max: 6, step: 0.2, sect: "geo", fams: { wn: 1 } },
     { key: "wnClear", label: "Fin edge clearance", unit: "mm", min: 0, max: 3, step: 0.2, sect: "geo", fams: { wn: 1 } },
     { key: "wnFinU1", label: "Fin end (u)", unit: "", min: 0.3, max: 1.0, step: 0.02, sect: "geo", fams: { wn: 1 } },
-    { key: "flareWrap", label: "Roundover wrap past mouth", unit: "\u00b0", min: 0, max: 135, step: 5, sect: "geo", notFams: { iwata: 1 } },   /* entry 167: wn UN-GATED -- surface-frame lip (T x R, global sign) + master-subsample fixed the entry-158/160 breakage */
+    { key: "flareWrap", label: "Roundover wrap past mouth", unit: "\u00b0", min: 0, max: 135, step: 5, sect: "geo", notFams: { iwata: 1 } },
+    { key: "flareRV", label: "V roll depth (taper; 0 = full)", unit: "mm", min: 0, max: 80, step: 1, sect: "geo", fams: { wn: 1 } },   /* entry 186: per-plane rollback -- deep sides contain H while shallow top/bottom leaves the V rim near-bare at LF (the WN300ALO-style combination experiment) */   /* entry 167: wn UN-GATED -- surface-frame lip (T x R, global sign) + master-subsample fixed the entry-158/160 breakage */
     { key: "flareR", label: "Mouth roundover R", unit: "mm", min: 0, max: 100, step: 2, sect: "geo", notFams: { jmlc: 1, iwata: 1 } },   /* entry 167: wn un-gated */
     { key: "thick", label: "Wall thickness (3-D)", unit: "mm", min: 2, max: 12, step: 0.5, sect: "geo" },   /* entry 176: universal -- the wn gate hid the control while S.thick silently drove its shell anyway (the entry-152 iwata trap, again) */
     { key: "iwExitD", label: "Driver exit \u00d8 cut (0 = full neck)", unit: "mm", min: 0, max: 76.2, step: 0.1, sect: "geo", fams: { iwata: 1 } },
@@ -5583,15 +5625,22 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
 
     PARAMS.forEach(function (p) {
       var num = document.getElementById("num_" + p.key), rng = document.getElementById("rng_" + p.key);
-      function set(v) {
+      function set(v, typing9) {
         if (!isFinite(v)) return;
-        var vc = Math.max(p.min, Math.min(p.max, v));   // AUDIT #12: clamp to declared limits;
-        S[p.key] = vc; num.value = vc; rng.value = vc;   // the displayed value IS the effective value
+        var vc = Math.max(p.min, Math.min(p.max, v));   // AUDIT #12: clamp to declared limits
+        S[p.key] = vc; rng.value = vc;
+        // entry 189 (user report: "typing 22 goes to 42"): clamping WROTE BACK
+        // into the field on every keystroke -- the first digit "2" clamped to
+        // the min ("4"), then the second keystroke appended: "42". While the
+        // user is TYPING, the field is theirs: state and the slider follow the
+        // clamped value silently; the field itself is normalized only on
+        // commit (change/blur/Enter).
+        if (!typing9) num.value = vc;
         scheduleUpdate();
       }
-      function markAndSet(v9) {
+      function markAndSet(v9, typing9) {
         if (!S._touched) S._touched = {}; S._touched[p.key] = 1;
-        set(v9);
+        set(v9, typing9);
         // entry 149 (SA8535 user: "I was expecting the flare calculations to
         // use the equivalent throat diameter"): changing the ribbon dims
         // auto-matches the throat to the area-equivalent -- the LAW follows
@@ -5605,7 +5654,8 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
           if (S._touched) delete S._touched.throatD;
         }
       }
-      num.addEventListener("input", function () { markAndSet(parseFloat(num.value)); });
+      num.addEventListener("input", function () { markAndSet(parseFloat(num.value), true); });
+      num.addEventListener("change", function () { markAndSet(parseFloat(num.value)); if (!isFinite(parseFloat(num.value))) num.value = S[p.key]; });   // commit: normalize the field
       rng.addEventListener("input", function () { markAndSet(parseFloat(rng.value)); });
     });
     // Per-family reference defaults, applied on family switch (2026-07-13; replaces a
@@ -5811,7 +5861,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       if (!exportGate()) return; if (!lastAct) return;
       var segsN = 48, ringsN = null, MN = 0;
       if (S.family === "biradial" && lastAct.fan) { var rN = buildAraiFanRings(lastAct, segsN, 0, 0); ringsN = rN.rings; MN = rN.M; }
-      else if (S.family === "wn" && lastAct.wn) { var rN2 = buildWNRings(lastAct, segsN, S.flareR, S.flareWrap); ringsN = rN2.rings; MN = rN2.M; }   /* entry 167: wrap live for wn BEM (the entry-158 diagnosis is resolved: builder lip shear + cross-count mismatch, both fixed) */
+      else if (S.family === "wn" && lastAct.wn) { var rN2 = buildWNRings(lastAct, segsN, S.flareR, S.flareWrap, S.flareRV > 0.5 ? S.flareRV : undefined); ringsN = rN2.rings; MN = rN2.M; }   /* entry 167: wrap live for wn BEM (the entry-158 diagnosis is resolved: builder lip shear + cross-count mismatch, both fixed) */
       else if (S.family === "iwata") { var rN3 = buildIwataRings(lastAct, segsN, 0, 0); ringsN = rN3.rings; MN = rN3.M; }
       else {
         // ~110 stations straight from profOf (the global interpolation solve is
@@ -5835,7 +5885,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       if (S.family === "wn" && S.flareR > 0.5) pathX9 += S.flareR * (90 + (S.flareWrap || 0)) * Math.PI / 180;   /* entry 169: the roll arc is real meridian length */
       var bud9 = (S.bemF || 14333) <= 14333 ? 12000 : ((S.bemF || 14333) === 20000 ? 24000 : 90000);   // entry 128
       if (S.family === "wn" && S.flareR > 0.5 && lastAct.wn) {   /* entry 173: the entry-169 budget scale ran AFTER bemBandSize had consumed the unscaled budget -- only the path increase took effect, which ALONE shrinks segs (the clamp redistributes scarcity): the "fine run" solved 3168 elems, leaked through the thin curl, and was unusable. Scale BEFORE sizing. */
-        var rB9 = buildWNRings(lastAct, 48, 0, 0), rW9 = buildWNRings(lastAct, 48, S.flareR, S.flareWrap);
+        var rB9 = buildWNRings(lastAct, 48, 0, 0), rW9 = buildWNRings(lastAct, 48, S.flareR, S.flareWrap, S.flareRV > 0.5 ? S.flareRV : undefined);
         var gA9 = function (rr9) {
           var A9 = 0;
           for (var ia9 = 1; ia9 < rr9.M; ia9++) for (var ja9 = 0; ja9 < 48; ja9++) {
@@ -5853,8 +5903,8 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       var rings9 = null, ringsBld9 = null;
       if (S.family === "biradial" && lastAct.fan) { rings9 = buildAraiFanRings(lastAct, sz9.segs, 0, 0); ringsBld9 = function (nQ) { return buildAraiFanRings(lastAct, nQ, 0, 0); }; }
       else if (S.family === "wn" && lastAct.wn) {
-        rings9 = buildWNRings(lastAct, sz9.segs, S.flareR, S.flareWrap);
-        ringsBld9 = function (nQ) { return buildWNRings(lastAct, nQ, S.flareR, S.flareWrap); };
+        rings9 = buildWNRings(lastAct, sz9.segs, S.flareR, S.flareWrap, S.flareRV > 0.5 ? S.flareRV : undefined);
+        ringsBld9 = function (nQ) { return buildWNRings(lastAct, nQ, S.flareR, S.flareWrap, S.flareRV > 0.5 ? S.flareRV : undefined); };
         // entry 173: the late budget scaling that lived here was dead code (sz9 already sized) -- moved before bemBandSize
 
       }
@@ -5863,7 +5913,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       var symReq9 = (S.bemSym === "quarter") && !rings9 && !(finM9 && finM9.length);   // entry 137: quarter allowed for bLab too (its xy mirror symmetry)
       var baffle9 = !blab9 && (S.bemModel === "baffle") && !rings9;   // entry 134: graded prof path only; bLab = closed
       var cap9 = (S.bemSrc === "cap") && !rings9 && !(S.ribW > 0 && S.ribH > 0);   // ribbon throats keep the rectangular face
-      var bp9 = buildBEMProject(lastAct, prof9, rings9, { thick: S.thick, stations: 400, segs: sz9.segs, targetEdge: sz9.targetEdge, budget: bud9, finMeshes: finM9, symmetry: symReq9 ? "quarter" : undefined, baffle: baffle9, srcCap: cap9, ringsBuilder: ringsBld9 });
+      var bp9 = buildBEMProject(lastAct, prof9, rings9, { thick: S.thick, curlRMin: (S.flareR > 0.5 ? Math.min(S.flareR, (S.family === "wn" && S.flareRV > 0.5) ? S.flareRV : S.flareR) : 0), stations: 400, segs: sz9.segs, targetEdge: sz9.targetEdge, budget: bud9, finMeshes: finM9, symmetry: symReq9 ? "quarter" : undefined, baffle: baffle9, srcCap: cap9, ringsBuilder: ringsBld9 });
       return { bp: bp9, blab: blab9, baffle: baffle9, cap: cap9 };
     };
     document.getElementById("exAkabak").addEventListener("click", function () {
@@ -5871,7 +5921,12 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       try {
         var cur9 = buildCurrentBEM();
         var bp9 = cur9.bp, blab9 = cur9.blab;
-        var mshName9 = fname(blab9 ? "blab_bem" : (cur9.baffle ? "akabak_baffle_bem" : "akabak_bem")) + ".msh";
+        if (bp9 && bp9.curl && bp9.curl.verdict !== "resolved") {   /* entry 187: warn BEFORE the solver run gets wasted */
+          var cv9 = bp9.curl;
+          var ok9 = confirm("CURL RESOLUTION " + cv9.verdict + ": the tightest mouth roll (r = " + cv9.rMin.toFixed(0) + " mm) vs mean element edge " + cv9.meanEdge.toFixed(1) + " mm gives ratio " + cv9.ratio.toFixed(2) + " (safe <= 0.55).\n\nBEM cannot integrate a fold thinner than its elements -- expect rear-rejection leakage and an invalid run (the diagnostic: 180-degree level at 1 kHz reading -3 to -8 dB instead of <= -10).\n\nFix: raise the roll radius, or raise the mesh density tier.\n\nExport anyway?");
+          if (!ok9) return;
+        }
+        var mshName9 = fname((blab9 ? "blab_bem" : (cur9.baffle ? "akabak_baffle_bem" : "akabak_bem")) + (bp9.sym === 2 ? "_QUARTER_xy" : "")) + ".msh";   /* entry 188: the model type belongs in the filename -- a quarter mesh opened without its symmetry declaration produced a garbage run and a confusing screenshot; now the file names itself */
         var mshText9 = bemToMsh(bp9);
         if (!blab9) saveBlob(mshName9, new Blob([mshText9], { type: "text/plain" }));
         if (blab9) {
@@ -6002,8 +6057,8 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     });
     document.getElementById("exObj").addEventListener("click", function () {
       if (!exportGate()) return; if (!lastAct) return; var _m2 = buildStyledMesh(lastAct, 180, 56); validateMesh(_m2, true); exportOBJ(_m2, fname("mesh") + ".obj"); });
-    document.getElementById("exCloud").addEventListener("click", function () { if (!lastAct) return; if (S.family === "biradial" && lastAct.fan) exportCloudRings(buildAraiFanRings(lastAct, 96, S.flareR, S.flareWrap), 96, fname("cloud") + ".xyz", false); else if (S.family === "wn" && lastAct.wn) exportCloudRings(buildWNRings(lastAct, 96, S.flareR, S.flareWrap), 96, fname("cloud") + ".xyz", false); else exportCloud(profOf(lastAct, 260), fname("cloud") + ".xyz", false); });
-    document.getElementById("exQuarter").addEventListener("click", function () { if (!lastAct) return; if (S.family === "biradial" && lastAct.fan) exportCloudRings(buildAraiFanRings(lastAct, 96, S.flareR, S.flareWrap), 96, fname("cloud_q4") + ".xyz", true); else if (S.family === "wn" && lastAct.wn) exportCloudRings(buildWNRings(lastAct, 96, S.flareR, S.flareWrap), 96, fname("cloud_q4") + ".xyz", true); else exportCloud(profOf(lastAct, 260), fname("cloud_q4") + ".xyz", true); });
+    document.getElementById("exCloud").addEventListener("click", function () { if (!lastAct) return; if (S.family === "biradial" && lastAct.fan) exportCloudRings(buildAraiFanRings(lastAct, 96, S.flareR, S.flareWrap), 96, fname("cloud") + ".xyz", false); else if (S.family === "wn" && lastAct.wn) exportCloudRings(buildWNRings(lastAct, 96, S.flareR, S.flareWrap, S.flareRV > 0.5 ? S.flareRV : undefined), 96, fname("cloud") + ".xyz", false); else exportCloud(profOf(lastAct, 260), fname("cloud") + ".xyz", false); });
+    document.getElementById("exQuarter").addEventListener("click", function () { if (!lastAct) return; if (S.family === "biradial" && lastAct.fan) exportCloudRings(buildAraiFanRings(lastAct, 96, S.flareR, S.flareWrap), 96, fname("cloud_q4") + ".xyz", true); else if (S.family === "wn" && lastAct.wn) exportCloudRings(buildWNRings(lastAct, 96, S.flareR, S.flareWrap, S.flareRV > 0.5 ? S.flareRV : undefined), 96, fname("cloud_q4") + ".xyz", true); else exportCloud(profOf(lastAct, 260), fname("cloud_q4") + ".xyz", true); });
     update();
   }
   function fname(kind) {
