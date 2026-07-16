@@ -1424,6 +1424,103 @@ function wnWall(P) {
            horizontalWallArcLength: prof.L, axialDepth: prof.zOuter[prof.zOuter.length - 1],
            finalAxialZ: prof.zOuter[prof.zOuter.length - 1] };
 }
+function surfaceFrameLip(pos, M0, segs, flareR, wrapDeg, FS) {
+  // entry 179 (factored from buildWNRings, entries 167 + 170): the SURFACE-FRAME
+  // LIP -- per-azimuth independent rollback. Frames from the true local surface
+  // (T x rim-tangent, ONE global sign), spiral launch (radial flare, no knee).
+  // On a rectangular mouth this IS "independent roll for each side": top/bottom
+  // roll about horizontal axes, sides about vertical axes, corners blend
+  // automatically because the frames interpolate continuously along the rim.
+  {
+    // tangent-continuous lip with SMOOTHED frames (the proven biradial pattern):
+    // rotate from the true 3-D meridian tangent toward the outward section normal.
+    var wrap = Math.min(225, 90 + wrapDeg) * Math.PI / 180;
+    var bMr = (M0 - 1) * segs, bPr = (M0 - 2) * segs;
+    var Traw = [], Nraw = [], Pms = [];
+    for (var j2 = 0; j2 < segs; j2++) {
+      var kM = (bMr + j2) * 3, kP = (bPr + j2) * 3;
+      Pms.push([pos[kM], pos[kM + 1], pos[kM + 2]]);
+      var Tm = [pos[kM] - pos[kP], pos[kM + 1] - pos[kP + 1], pos[kM + 2] - pos[kP + 2]];
+      var Tl = Math.hypot(Tm[0], Tm[1], Tm[2]) || 1e-9;
+      Traw.push([Tm[0] / Tl, Tm[1] / Tl, Tm[2] / Tl]);
+      // entry 167: the lip normal from the TRUE LOCAL SURFACE -- N = T x R
+      // where R is the 3-D rim tangent (carrying the rim's ~150 mm axial
+      // swing). The old N was purely LATERAL ([0, nx, ny]) against heavily
+      // tilted meridians, and smoothing those inconsistent frames sheared the
+      // roll near the rect corners (100-mm azimuthal neighbor steps deep in
+      // the wrap -- the entry-160/164 diagnosis).
+      var jp = (j2 + segs - 1) % segs, jn = (j2 + 1) % segs;
+      var kJP = (bMr + jp) * 3, kJN = (bMr + jn) * 3;
+      var Rx9 = pos[kJN] - pos[kJP], Ry9 = pos[kJN + 1] - pos[kJP + 1], Rz9 = pos[kJN + 2] - pos[kJP + 2];
+      var Rl9 = Math.hypot(Rx9, Ry9, Rz9) || 1e-9;
+      Rx9 /= Rl9; Ry9 /= Rl9; Rz9 /= Rl9;
+      var Tj9 = Traw[j2];
+      var Nx9 = Tj9[1] * Rz9 - Tj9[2] * Ry9,
+          Ny9 = Tj9[2] * Rx9 - Tj9[0] * Rz9,
+          Nz9 = Tj9[0] * Ry9 - Tj9[1] * Rx9;
+      // NO per-azimuth sign flip: T x R is globally consistent on the smooth
+      // rim (per-j outwardness tests flip noisily near the corners where N
+      // legitimately tilts axial -- the 155-mm neighbor jumps). One global
+      // sign decision after the loop.
+      var Nl0 = Math.hypot(Nx9, Ny9, Nz9) || 1e-9;
+      Nraw.push([Nx9 / Nl0, Ny9 / Nl0, Nz9 / Nl0]);
+    }
+    var sgn9 = 0;
+    for (var js9 = 0; js9 < segs; js9++) {
+      var kPCs = ((M0 - 1) * segs + js9) * 3;
+      var pCs = { x: pos[kPCs + 1], y: pos[kPCs + 2] };
+      sgn9 += Nraw[js9][1] * pCs.x + Nraw[js9][2] * pCs.y;
+    }
+    if (sgn9 < 0) for (var jf9 = 0; jf9 < segs; jf9++) { Nraw[jf9][0] = -Nraw[jf9][0]; Nraw[jf9][1] = -Nraw[jf9][1]; Nraw[jf9][2] = -Nraw[jf9][2]; }
+    function smV(arr, j9) {
+      var v = [0, 0, 0];
+      for (var w9 = -2; w9 <= 2; w9++) { var sc = arr[(j9 + w9 + segs) % segs]; v[0] += sc[0]; v[1] += sc[1]; v[2] += sc[2]; }
+      var L9 = Math.hypot(v[0], v[1], v[2]) || 1e-9;
+      return [v[0] / L9, v[1] / L9, v[2] / L9];
+    }
+    for (var j3 = 0; j3 < segs; j3++) {
+      var Pm = Pms[j3], Tm2 = smV(Traw, j3), N4 = smV(Nraw, j3);
+      var dNT = N4[0] * Tm2[0] + N4[1] * Tm2[1] + N4[2] * Tm2[2];
+      N4 = [N4[0] - dNT * Tm2[0], N4[1] - dNT * Tm2[1], N4[2] - dNT * Tm2[2]];
+      var Nl = Math.hypot(N4[0], N4[1], N4[2]) || 1e-9;
+      N4 = [N4[0] / Nl, N4[1] / Nl, N4[2] / Nl];
+      // entry 170 (Dr. Ahlswede, p.s. to the provenance correspondence: "The
+      // Neile rollover should not have a knee. A radial flare works better"):
+      // the old constant-radius roll launched tangent-continuous but with a
+      // CURVATURE STEP (wall curvature -> 1/flareR instantly). The lip is now
+      // a SPIRAL LAUNCH: curvature eases linearly from ~0 to 1/flareR over
+      // the first 30% of the wrap, then constant -- integrated as a polyline
+      // in the (T, N) plane, endpoint parameterization preserved.
+      var ease9 = 0.30, NSp9 = 4 * FS;
+      var ang9 = 0, u9 = 0, v9 = 0, dph9;
+      var lipU9 = [0], lipV9 = [0], lipA9 = [0];
+      for (var sp9 = 1; sp9 <= NSp9; sp9++) {
+        var fr9 = sp9 / NSp9;
+        var kap9 = (fr9 < ease9 ? fr9 / ease9 : 1) / flareR;
+        // arc-length step chosen so the TOTAL turn reaches `wrap`:
+        // total turn = integral kappa ds; with the ease, ds_total = wrap*flareR/(1-ease/2)
+        var dsTot9 = wrap * flareR / (1 - ease9 / 2);
+        var ds9 = dsTot9 / NSp9;
+        u9 += Math.cos(ang9) * ds9;
+        v9 += Math.sin(ang9) * ds9;
+        ang9 += kap9 * ds9;
+        lipU9.push(u9); lipV9.push(v9); lipA9.push(ang9);
+      }
+      for (var q = 1; q <= FS; q++) {
+        // sample the spiral at equal ARC fractions (uniform lip row spacing --
+        // equal-turn bunched rows at deep curls and wrecked graded aspects)
+        var si9 = Math.max(1, Math.min(NSp9, Math.round(q * NSp9 / FS)));
+        var uu9 = lipU9[si9], vv9 = lipV9[si9];
+        var f29 = 0;
+        var kk = ((M0 + q - 1) * segs + j3) * 3;
+        pos[kk] = Pm[0] + uu9 * Tm2[0] + vv9 * N4[0];
+        pos[kk + 1] = Pm[1] + uu9 * Tm2[1] + vv9 * N4[1];
+        pos[kk + 2] = Pm[2] + uu9 * Tm2[2] + vv9 * N4[2];
+      }
+    }
+  }
+}
+
 function buildWNRings(horn, segs, flareR, wrapDeg) {
   // True curved 3-D station rings for the WN family: rounded-rect perimeter per
   // station (corner-pinned per-edge allocation, mouth proportions -- the same
@@ -1477,93 +1574,7 @@ function buildWNRings(horn, segs, flareR, wrapDeg) {
       pos[k] = zj; pos[k + 1] = pt.x; pos[k + 2] = pt.y;
     }
   }
-  if (FS > 0) {
-    // tangent-continuous lip with SMOOTHED frames (the proven biradial pattern):
-    // rotate from the true 3-D meridian tangent toward the outward section normal.
-    var wrap = Math.min(225, 90 + wrapDeg) * Math.PI / 180;
-    var bMr = (M0 - 1) * segs, bPr = (M0 - 2) * segs;
-    var Traw = [], Nraw = [], Pms = [];
-    for (var j2 = 0; j2 < segs; j2++) {
-      var kM = (bMr + j2) * 3, kP = (bPr + j2) * 3;
-      Pms.push([pos[kM], pos[kM + 1], pos[kM + 2]]);
-      var Tm = [pos[kM] - pos[kP], pos[kM + 1] - pos[kP + 1], pos[kM + 2] - pos[kP + 2]];
-      var Tl = Math.hypot(Tm[0], Tm[1], Tm[2]) || 1e-9;
-      Traw.push([Tm[0] / Tl, Tm[1] / Tl, Tm[2] / Tl]);
-      // entry 167: the lip normal from the TRUE LOCAL SURFACE -- N = T x R
-      // where R is the 3-D rim tangent (carrying the rim's ~150 mm axial
-      // swing). The old N was purely LATERAL ([0, nx, ny]) against heavily
-      // tilted meridians, and smoothing those inconsistent frames sheared the
-      // roll near the rect corners (100-mm azimuthal neighbor steps deep in
-      // the wrap -- the entry-160/164 diagnosis).
-      var jp = (j2 + segs - 1) % segs, jn = (j2 + 1) % segs;
-      var kJP = (bMr + jp) * 3, kJN = (bMr + jn) * 3;
-      var Rx9 = pos[kJN] - pos[kJP], Ry9 = pos[kJN + 1] - pos[kJP + 1], Rz9 = pos[kJN + 2] - pos[kJP + 2];
-      var Rl9 = Math.hypot(Rx9, Ry9, Rz9) || 1e-9;
-      Rx9 /= Rl9; Ry9 /= Rl9; Rz9 /= Rl9;
-      var Tj9 = Traw[j2];
-      var Nx9 = Tj9[1] * Rz9 - Tj9[2] * Ry9,
-          Ny9 = Tj9[2] * Rx9 - Tj9[0] * Rz9,
-          Nz9 = Tj9[0] * Ry9 - Tj9[1] * Rx9;
-      // NO per-azimuth sign flip: T x R is globally consistent on the smooth
-      // rim (per-j outwardness tests flip noisily near the corners where N
-      // legitimately tilts axial -- the 155-mm neighbor jumps). One global
-      // sign decision after the loop.
-      var Nl0 = Math.hypot(Nx9, Ny9, Nz9) || 1e-9;
-      Nraw.push([Nx9 / Nl0, Ny9 / Nl0, Nz9 / Nl0]);
-    }
-    var sgn9 = 0;
-    for (var js9 = 0; js9 < segs; js9++) {
-      var pCs = ringPt(aM, bM, prof.rc[M0 - 1], js9);
-      sgn9 += Nraw[js9][1] * pCs.x + Nraw[js9][2] * pCs.y;
-    }
-    if (sgn9 < 0) for (var jf9 = 0; jf9 < segs; jf9++) { Nraw[jf9][0] = -Nraw[jf9][0]; Nraw[jf9][1] = -Nraw[jf9][1]; Nraw[jf9][2] = -Nraw[jf9][2]; }
-    function smV(arr, j9) {
-      var v = [0, 0, 0];
-      for (var w9 = -2; w9 <= 2; w9++) { var sc = arr[(j9 + w9 + segs) % segs]; v[0] += sc[0]; v[1] += sc[1]; v[2] += sc[2]; }
-      var L9 = Math.hypot(v[0], v[1], v[2]) || 1e-9;
-      return [v[0] / L9, v[1] / L9, v[2] / L9];
-    }
-    for (var j3 = 0; j3 < segs; j3++) {
-      var Pm = Pms[j3], Tm2 = smV(Traw, j3), N4 = smV(Nraw, j3);
-      var dNT = N4[0] * Tm2[0] + N4[1] * Tm2[1] + N4[2] * Tm2[2];
-      N4 = [N4[0] - dNT * Tm2[0], N4[1] - dNT * Tm2[1], N4[2] - dNT * Tm2[2]];
-      var Nl = Math.hypot(N4[0], N4[1], N4[2]) || 1e-9;
-      N4 = [N4[0] / Nl, N4[1] / Nl, N4[2] / Nl];
-      // entry 170 (Dr. Ahlswede, p.s. to the provenance correspondence: "The
-      // Neile rollover should not have a knee. A radial flare works better"):
-      // the old constant-radius roll launched tangent-continuous but with a
-      // CURVATURE STEP (wall curvature -> 1/flareR instantly). The lip is now
-      // a SPIRAL LAUNCH: curvature eases linearly from ~0 to 1/flareR over
-      // the first 30% of the wrap, then constant -- integrated as a polyline
-      // in the (T, N) plane, endpoint parameterization preserved.
-      var ease9 = 0.30, NSp9 = 4 * FS;
-      var ang9 = 0, u9 = 0, v9 = 0, dph9;
-      var lipU9 = [0], lipV9 = [0], lipA9 = [0];
-      for (var sp9 = 1; sp9 <= NSp9; sp9++) {
-        var fr9 = sp9 / NSp9;
-        var kap9 = (fr9 < ease9 ? fr9 / ease9 : 1) / flareR;
-        // arc-length step chosen so the TOTAL turn reaches `wrap`:
-        // total turn = integral kappa ds; with the ease, ds_total = wrap*flareR/(1-ease/2)
-        var dsTot9 = wrap * flareR / (1 - ease9 / 2);
-        var ds9 = dsTot9 / NSp9;
-        u9 += Math.cos(ang9) * ds9;
-        v9 += Math.sin(ang9) * ds9;
-        ang9 += kap9 * ds9;
-        lipU9.push(u9); lipV9.push(v9); lipA9.push(ang9);
-      }
-      for (var q = 1; q <= FS; q++) {
-        // sample the spiral at equal ARC fractions (uniform lip row spacing --
-        // equal-turn bunched rows at deep curls and wrecked graded aspects)
-        var si9 = Math.max(1, Math.min(NSp9, Math.round(q * NSp9 / FS)));
-        var uu9 = lipU9[si9], vv9 = lipV9[si9];
-        var f29 = 0;
-        var kk = ((M0 + q - 1) * segs + j3) * 3;
-        pos[kk] = Pm[0] + uu9 * Tm2[0] + vv9 * N4[0];
-        pos[kk + 1] = Pm[1] + uu9 * Tm2[1] + vv9 * N4[1];
-        pos[kk + 2] = Pm[2] + uu9 * Tm2[2] + vv9 * N4[2];
-      }
-    }
-  }
+  if (FS > 0) surfaceFrameLip(pos, M0, segs, flareR, wrapDeg, FS);
   return { rings: pos, M: M, segs: segs };
 }
 function wnFinMesh(horn, finT, clear, u0, u1) {
@@ -2753,7 +2764,64 @@ function buildSolidMesh(prof, t, segs, ringsOv, lipStyle) {
       }
   }
   for (j = 0; j < segs; j++) { var j4 = (j + 1) % segs; quad(j, j4, outBase + j4, outBase + j); } // throat annulus
-  return { pos: pos, idx: new Uint32Array(idx) };
+  return { pos: pos, idx: new Uint32Array(idx), layout: { M: M, segs: segs, RO: RO, roBase: roBase, outBase: outBase } };
+}
+
+function rollAudit(sm) {
+  // entry 178 (Marwan: "we need a full proof method" for roundovers): the
+  // universal roll invariants. Any geometry change that breaks a mouth roll
+  // trips one of these:
+  //  launchDeg  -- max angle between the roll's first step and the wall's own
+  //                terminal meridian, across azimuths (C1 launch; a lip = a
+  //                launch that departs the wall);
+  //  shearRatio -- worst intra-ring azimuthal neighbor step in the roll rows
+  //                over the rim row's own (frame coherence; the WN entry-167
+  //                diagnostic);
+  //  ledge      -- worst row-to-row advance over the median advance (a step/
+  //                ledge = one interval much larger than its neighbors);
+  //  finite     -- no NaN anywhere in the roll rows.
+  var L = sm.layout, pos = sm.pos;
+  if (!L || L.RO <= 1) return { launchDeg: 0, shearRatio: 1, ledge: 1, finite: true, rows: 0 };
+  var segs = L.segs, M = L.M;
+  function P(row, j) {
+    var base = row === 0 ? (M - 1) * segs : (row === L.RO ? L.outBase + (M - 1) * segs : L.roBase + (row - 1) * segs);
+    var k = (base + (j % segs)) * 3;
+    return [pos[k], pos[k + 1], pos[k + 2]];
+  }
+  var launch = 0, shear = 0, ledge = 0, finite = true;
+  var rimStep = 0;
+  for (var j = 0; j < segs; j++) {
+    var a = P(0, j), b = P(0, j + 1);
+    rimStep = Math.max(rimStep, Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]));
+  }
+  for (var j2 = 0; j2 < segs; j2++) {
+    // C1 launch: wall terminal meridian vs first roll step
+    var kE = ((M - 1) * segs + j2) * 3, kP = ((M - 2) * segs + j2) * 3;
+    var m = [pos[kE] - pos[kP], pos[kE + 1] - pos[kP + 1], pos[kE + 2] - pos[kP + 2]];
+    var r1 = P(1, j2), r0 = P(0, j2);
+    var s = [r1[0] - r0[0], r1[1] - r0[1], r1[2] - r0[2]];
+    var ml = Math.hypot(m[0], m[1], m[2]) || 1e-12, sl = Math.hypot(s[0], s[1], s[2]) || 1e-12;
+    var dot = (m[0] * s[0] + m[1] * s[1] + m[2] * s[2]) / (ml * sl);
+    launch = Math.max(launch, Math.acos(Math.max(-1, Math.min(1, dot))) * 180 / Math.PI);
+    // ledge: row-to-row advances along this azimuth
+    var adv = [];
+    for (var rr = 0; rr < L.RO; rr++) {
+      var A2 = P(rr, j2), B2 = P(rr + 1, j2);
+      var d2 = Math.hypot(A2[0] - B2[0], A2[1] - B2[1], A2[2] - B2[2]);
+      adv.push(d2);
+      if (!isFinite(d2)) finite = false;
+    }
+    var srt = adv.slice().sort(function (x, y) { return x - y; });
+    var med = srt[Math.floor(srt.length / 2)] || 1e-9;
+    ledge = Math.max(ledge, srt[srt.length - 1] / Math.max(1e-9, med));
+  }
+  for (var rr2 = 1; rr2 < L.RO; rr2++) {
+    for (var j3 = 0; j3 < segs; j3++) {
+      var A3 = P(rr2, j3), B3 = P(rr2, j3 + 1);
+      shear = Math.max(shear, Math.hypot(A3[0] - B3[0], A3[1] - B3[1], A3[2] - B3[2]));
+    }
+  }
+  return { launchDeg: launch, shearRatio: shear / Math.max(1e-9, rimStep), ledge: ledge, finite: finite, rows: L.RO };
 }
 
 /* ============ Build-style extras (2026-07-13): fin solids + cabinet shell ============ */
@@ -3131,65 +3199,15 @@ function buildAraiFanRings(horn, segs, flareR, wrapDeg) {
   // hAt, rho shrinking inside a fixed box) and pinned by the smoke containment guard.
   var FS = (flareR > 0.5) ? 10 : 0;
   if (FS > 0) {
-    // TANGENT-CONTINUOUS LIP (2026-07-13, Marwan: "follow the actual curvature"): the
-    // old roll started purely radial while the wall arrives CLIMBING (~45 deg on the
-    // top/bottom at the mouth) -- a visible crease at the lip start. The roll now
-    // rotates FROM the true 3-D meridian tangent (last two rings, per perimeter point)
-    // toward the outward section normal: P(q) = Pm + R*(sin(phi) T + (1-cos(phi)) N).
-    var wrap = Math.min(225, 90 + wrapDeg) * Math.PI / 180;
-    var lip = new Float32Array(FS * segs * 3);
-    var hMm = hAt(F.Rm), wDevM = F.Rm * thWOf(F.Rm * 0.9999);
-    var bM = (M - 1) * segs, bP = (M - 2) * segs;
-    // PASS 1: raw per-point frames (meridian tangent + outward section normal).
-    // PASS 2 (2026-07-13, Marwan: "messed up around the sides"): SMOOTH the frames
-    // along the perimeter (+-2 circular moving average, renormalized, N re-orthogonal-
-    // ized against the smoothed T). Near the wing/arc corners the ring-to-ring
-    // correspondence shifts laterally, so raw tangents jitter and the lip curled in
-    // conflicting directions there.
-    var Traw = [], Nraw = [], Pms = [];
-    for (var j2 = 0; j2 < segs; j2++) {
-      var kM = (bM + j2) * 3, kP = (bP + j2) * 3;
-      Pms.push([pos[kM], pos[kM + 1], pos[kM + 2]]);
-      var Tm = [pos[kM] - pos[kP], pos[kM + 1] - pos[kP + 1], pos[kM + 2] - pos[kP + 2]];
-      var Tl = Math.hypot(Tm[0], Tm[1], Tm[2]) || 1e-9;
-      Traw.push([Tm[0] / Tl, Tm[1] / Tl, Tm[2] / Tl]);
-      var jp = (j2 + segs - 1) % segs, jn = (j2 + 1) % segs;
-      var pC = arcRect(wDevM, hMm, 1, j2), pP2 = arcRect(wDevM, hMm, 1, jp), pN2 = arcRect(wDevM, hMm, 1, jn);
-      var tx = pN2.sx - pP2.sx, ty = pN2.sy - pP2.sy, tl2 = Math.hypot(tx, ty) || 1e-9;
-      var nx = ty / tl2, ny = -tx / tl2;
-      if (nx * pC.sx + ny * pC.sy < 0) { nx = -nx; ny = -ny; }
-      var th3 = pC.sx / F.Rm;
-      var N3 = [nx * -Math.sin(th3), nx * Math.cos(th3), ny];
-      Nraw.push(N3);
-    }
-    function smoothVec(arr, j9) {
-      var v = [0, 0, 0];
-      for (var w9 = -2; w9 <= 2; w9++) {
-        var src = arr[(j9 + w9 + segs) % segs];
-        v[0] += src[0]; v[1] += src[1]; v[2] += src[2];
-      }
-      var L9 = Math.hypot(v[0], v[1], v[2]) || 1e-9;
-      return [v[0] / L9, v[1] / L9, v[2] / L9];
-    }
-    for (var j3 = 0; j3 < segs; j3++) {
-      var Pm = Pms[j3];
-      var Tm2 = smoothVec(Traw, j3);
-      var N4 = smoothVec(Nraw, j3);
-      var dNT = N4[0] * Tm2[0] + N4[1] * Tm2[1] + N4[2] * Tm2[2];
-      N4 = [N4[0] - dNT * Tm2[0], N4[1] - dNT * Tm2[1], N4[2] - dNT * Tm2[2]];
-      var Nl = Math.hypot(N4[0], N4[1], N4[2]) || 1e-9;
-      N4 = [N4[0] / Nl, N4[1] / Nl, N4[2] / Nl];
-      for (var q = 1; q <= FS; q++) {
-        var ph = wrap * q / FS;
-        var sph = Math.sin(ph), cph = 1 - Math.cos(ph);
-        var kk = ((q - 1) * segs + j3) * 3;
-        lip[kk]     = Pm[0] + flareR * (sph * Tm2[0] + cph * N4[0]);
-        lip[kk + 1] = Pm[1] + flareR * (sph * Tm2[1] + cph * N4[1]);
-        lip[kk + 2] = Pm[2] + flareR * (sph * Tm2[2] + cph * N4[2]);
-      }
-    }
-    var all = new Float32Array(pos.length + lip.length);
-    all.set(pos, 0); all.set(lip, pos.length);
+    // entry 179 (Marwan: "create independent roll back for these square-like
+    // horns for each side"): the OLD inline lip (lateral frames, pre-entry-167)
+    // rolled the rect corners apart -- the back-visible edge. Replaced with the
+    // factored SURFACE-FRAME LIP (T x rim-tangent frames, global sign, spiral
+    // launch): per-azimuth independent rollback = top/bottom roll about
+    // horizontal axes, sides about vertical axes, corners blend continuously.
+    var all = new Float32Array((M + FS) * segs * 3);
+    all.set(pos, 0);
+    surfaceFrameLip(all, M, segs, flareR, wrapDeg, FS);
     return { rings: all, M: M + FS };
   }
   return { rings: pos, M: M };
@@ -4722,7 +4740,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     fins: "off", shell: "uniform", finT: 10, adaptL: 25, wnUL: 0.5, wnUC: 0.68, showConstr: false, wnFins: 0, wnFinT: 1.0, wnClear: 0.4, wnFinU1: 0.7,
     aspect: 1.0, section: "ellipse", cornerR: 60, covH: 90, covV: 40, f0: 800, osK: 1.0, osS: 0.7, osN: 4, seN: 2.5, spProj: "flat", f0V: 0, TaddV: 0.4, fmultV: 2, rosR: 130, rosA: 39, rosA0: 7.5, rosK: 1.8, rosRr: 0.3, rosB: 0.3, rosM: 0.8, rosQ: 3.7, flareR: 20, flareWrap: 0, thick: 5
   };
-  var FAMILY_NAMES = { jmlc: "JMLC isophase", jmlcell: "JMLC quasi-elliptical (2007)", iwata: "Iwata (JMLC 2007)", swh: "Kugelwellen (SWH)", tractrix: "Tractrix", hypex: "Hypex (plane wave)", conical: "Conical", cd: "CD horn (Keele 1975)", biradial: "Yuichi-inspired biradial", os: "OS-SE waveguide (Bat\u00edk 2020)", osc: "Classic OS (Geddes 1989)", wn: "William Neile-inspired biradial", rosse: "R-OSSE (Bat\u00edk 2022)" };
+  var FAMILY_NAMES = { jmlc: "JMLC isophase", jmlcell: "JMLC quasi-elliptical (2007)", iwata: "Iwata (JMLC 2007)", swh: "Kugelwellen (SWH)", tractrix: "Tractrix", hypex: "Hypex (plane wave)", conical: "Conical", cd: "CD horn (Keele 1975)", biradial: "Yuichi biradial (after Arai)", os: "OS-SE waveguide (Bat\u00edk 2020)", osc: "Classic OS (Geddes 1989)", wn: "William Neile biradial (equal-path)", rosse: "R-OSSE (Bat\u00edk 2022)" };
   var LAW_FAMILIES = { jmlc: 1, jmlcell: 1, swh: 1, hypex: 1, cd: 1 , biradial: 1, wn: 1 };
   var PETF_FAMILIES = { jmlc: 1, swh: 1, hypex: 1 }; // PETF is published for round law horns, not for Keele CD
   function fmt(v, d) { return isFinite(v) ? v.toFixed(d === undefined ? 1 : d) : "\u2014"; }
@@ -4891,7 +4909,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       svg += wfSVG;
       svg += pathOf(actProf.V, 1, colV, 1.6, false) + pathOf(actProf.V, -1, colV, 1.6, false);
       svg += pathOf(actProf.H, 1, col, 1.8, false) + pathOf(actProf.H, -1, col, 1.8, false);
-      if (S.family === "wn" && S.flareR > 0.5) {   /* entry 169: draw the LIP so curl depth is designable by eye */
+      if ((S.family === "wn" || S.family === "biradial") && S.flareR > 0.5) {   /* entry 169/180: draw the LIP so curl depth is designable by eye -- both surface-frame-lip families */
         var lipOf9 = function (pts9, sgn9, colQ9) {
           var pE9 = pts9[pts9.length - 1], pP9 = pts9[pts9.length - 3];
           var tz9 = pE9.z - pP9.z, tr9 = pE9.r - pP9.r, tl9 = Math.hypot(tz9, tr9) || 1e-9;
@@ -5336,16 +5354,16 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     { key: "wnFinU1", label: "Fin end (u)", unit: "", min: 0.3, max: 1.0, step: 0.02, sect: "geo", fams: { wn: 1 } },
     { key: "flareWrap", label: "Roundover wrap past mouth", unit: "\u00b0", min: 0, max: 135, step: 5, sect: "geo", notFams: { iwata: 1 } },   /* entry 167: wn UN-GATED -- surface-frame lip (T x R, global sign) + master-subsample fixed the entry-158/160 breakage */
     { key: "flareR", label: "Mouth roundover R", unit: "mm", min: 0, max: 100, step: 2, sect: "geo", notFams: { jmlc: 1, iwata: 1 } },   /* entry 167: wn un-gated */
-    { key: "thick", label: "Wall thickness (3-D)", unit: "mm", min: 2, max: 12, step: 0.5, sect: "geo", notFams: { wn: 1 } },   /* entry 152: iwata re-included -- the hidden control silently pinned its preview shell at 6 mm */
+    { key: "thick", label: "Wall thickness (3-D)", unit: "mm", min: 2, max: 12, step: 0.5, sect: "geo" },   /* entry 176: universal -- the wn gate hid the control while S.thick silently drove its shell anyway (the entry-152 iwata trap, again) */
     { key: "iwExitD", label: "Driver exit \u00d8 cut (0 = full neck)", unit: "mm", min: 0, max: 76.2, step: 0.1, sect: "geo", fams: { iwata: 1 } },
     { key: "exitLen", label: "Straight driver entry L (0 = off)", unit: "mm", min: 0, max: 40, step: 1, sect: "geo", notFams: { cd: 1, wn: 1, biradial: 1, iwata: 1 } },
     { key: "exitDeg", label: "Driver exit angle (included)", unit: "\u00b0", min: 0, max: 30, step: 0.5, sect: "geo", notFams: { cd: 1, wn: 1, biradial: 1, iwata: 1 } },
-    { key: "plateT", label: "Driver plate thickness (0 = off)", unit: "mm", min: 0, max: 40, step: 0.5, sect: "geo", notFams: { wn: 1, biradial: 1 } },
-    { key: "plateD", label: "Plate outer \u00d8 (0 = auto)", unit: "mm", min: 0, max: 320, step: 1, sect: "geo", notFams: { wn: 1, biradial: 1 } },
-    { key: "boltRot", label: "Bolt pattern rotation", unit: "\u00b0", min: 0, max: 120, step: 1, sect: "geo", notFams: { wn: 1, biradial: 1 } },
-    { key: "boltN", label: "Bolt count (0 = auto)", unit: "", min: 0, max: 8, step: 1, sect: "geo", notFams: { wn: 1, biradial: 1 } },
-    { key: "boltCircleD", label: "Bolt circle \u00d8 (0 = auto: 76.2 / 101.6)", unit: "mm", min: 0, max: 180, step: 0.1, sect: "geo", notFams: { wn: 1, biradial: 1 } },
-    { key: "boltHoleD", label: "Bolt hole \u00d8 (0 = auto: M6 clearance)", unit: "mm", min: 0, max: 12, step: 0.1, sect: "geo", notFams: { wn: 1, biradial: 1 } }
+    { key: "plateT", label: "Driver plate thickness (0 = off)", unit: "mm", min: 0, max: 40, step: 0.5, sect: "geo" },
+    { key: "plateD", label: "Plate outer \u00d8 (0 = auto)", unit: "mm", min: 0, max: 320, step: 1, sect: "geo" },
+    { key: "boltRot", label: "Bolt pattern rotation", unit: "\u00b0", min: 0, max: 120, step: 1, sect: "geo" },
+    { key: "boltN", label: "Bolt count (0 = auto)", unit: "", min: 0, max: 8, step: 1, sect: "geo" },
+    { key: "boltCircleD", label: "Bolt circle \u00d8 (0 = auto: 76.2 / 101.6)", unit: "mm", min: 0, max: 180, step: 0.1, sect: "geo" },
+    { key: "boltHoleD", label: "Bolt hole \u00d8 (0 = auto: M6 clearance)", unit: "mm", min: 0, max: 12, step: 0.1, sect: "geo" }
   ];
   function paramHTML(p) {
     return '<div class="param" id="wrap_' + p.key + '">' +
@@ -5454,6 +5472,8 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       [["ellipse","ellipse (round / Klangfilm)"],["sellipse","superellipse (Lam\u00e9)"],["rrect","rounded rectangle (WN)"]].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === S.section ? " selected" : "") + '>' + o[1] + "</option>"; }).join("") + '</select>' +
       '<select class="psel" id="finsSel" aria-label="Fin pack">' +
       [["off","Fins: off (blockage-compensated walls)"],["arai4","Fins: 4-fin Arai original (covH/5 cells)"],["on","Fins: 6-fin optimized pack"]].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === S.fins ? " selected" : "") + '>' + o[1] + "</option>"; }).join("") + '</select>' +
+      '<select class="psel" id="wnVoiceSel" aria-label="WN voicing">' +
+      [["ctrl", "Voicing: controlled (40/170\u00b0 \u2014 CD + rear rejection)"], ["ref", "Voicing: reference-style (18/150\u00b0 \u2014 wider LF, approximate)"]].map(function (o) { return '<option value="' + o[0] + '">' + o[1] + '</option>'; }).join("") + '</select>' +
       
       '<select class="psel" id="spSel" aria-label="Mouth geometry">' +
       [["flat","flat mouth plane"],["sp","spherical mouth (stereographic proj.)"]].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === S.spProj ? " selected" : "") + '>' + o[1] + "</option>"; }).join("") + '</select>';
@@ -5685,6 +5705,15 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       scheduleUpdate();
     });
     document.getElementById("finsSel").addEventListener("change", function (e) { S.fins = e.target.value; scheduleUpdate(); });
+    document.getElementById("wnVoiceSel").addEventListener("change", function (e) {   /* entry 182: the arbitration run exposed the design fork as a dial -- apply the recipe */
+      if (e.target.value === "ref") { S.flareR = 18; S.flareWrap = 60; } else { S.flareR = 40; S.flareWrap = 80; }
+      ["flareR", "flareWrap"].forEach(function (vk9) {   /* refresh the visible inputs, same pattern as applyFamilyDefaults */
+        var nEl9 = document.getElementById("num_" + vk9), rEl9 = document.getElementById("rng_" + vk9);
+        if (nEl9) nEl9.value = S[vk9];
+        if (rEl9) rEl9.value = S[vk9];
+      });
+      scheduleUpdate();
+    });
     document.getElementById("spSel").addEventListener("change", function (e) { S.spProj = e.target.value; scheduleUpdate(); });
     /* petf toggle replaced by preset select */
     document.getElementById("exCsv").addEventListener("click", function () {
@@ -5785,7 +5814,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       var symReq9 = (S.bemSym === "quarter") && !rings9 && !(finM9 && finM9.length);   // entry 137: quarter allowed for bLab too (its xy mirror symmetry)
       var baffle9 = !blab9 && (S.bemModel === "baffle") && !rings9;   // entry 134: graded prof path only; bLab = closed
       var cap9 = (S.bemSrc === "cap") && !rings9 && !(S.ribW > 0 && S.ribH > 0);   // ribbon throats keep the rectangular face
-      var bp9 = buildBEMProject(lastAct, prof9, rings9, { stations: 400, segs: sz9.segs, targetEdge: sz9.targetEdge, budget: bud9, finMeshes: finM9, symmetry: symReq9 ? "quarter" : undefined, baffle: baffle9, srcCap: cap9, ringsBuilder: ringsBld9 });
+      var bp9 = buildBEMProject(lastAct, prof9, rings9, { thick: S.thick, stations: 400, segs: sz9.segs, targetEdge: sz9.targetEdge, budget: bud9, finMeshes: finM9, symmetry: symReq9 ? "quarter" : undefined, baffle: baffle9, srcCap: cap9, ringsBuilder: ringsBld9 });
       return { bp: bp9, blab: blab9, baffle: baffle9, cap: cap9 };
     };
     document.getElementById("exAkabak").addEventListener("click", function () {
@@ -5988,6 +6017,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     var pe = PETF_FAMILIES[S.family];
     /* sectSel visibility owned by sectionOptionsFor in applicability (rule 6) */
     var _fs = document.getElementById("finsSel"); if (_fs) { _fs.style.display = (S.family === "biradial") ? "" : "none"; _fs.value = S.fins; }
+    var _wv = document.getElementById("wnVoiceSel"); if (_wv) { _wv.style.display = (S.family === "wn") ? "" : "none"; _wv.value = (S.flareR === 18 && S.flareWrap === 60) ? "ref" : "ctrl"; }
     var _stlB = document.getElementById("exStl"); if (_stlB) _stlB.textContent = (S.family === "biradial" || S.family === "wn") ? "INTERIOR SURFACE STL (open)" : "STL SOLID + ROUNDOVER";
     var _shB = document.getElementById("exShell"); if (_shB) _shB.style.display = (S.family === "biradial") ? "" : "none";
     var _scB = document.getElementById("showConstr"); if (_scB) { _scB.style.display = (S.family === "wn") ? "" : "none"; _scB.textContent = S.showConstr ? "HIDE CONSTRUCTION" : "SHOW CONSTRUCTION"; }
@@ -6154,7 +6184,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
         conical: 'Conical: straight walls at the entry half-angle from the throat; mouth radius c/(2\u03c0\u00b7fc). The reference everything else trades against.',
         cd: 'CD (Keele 1975, production recipe from his preprint): 0.5\u2033 round\u2192rect transition, then straight wedges at half the throat included angle A = 0.9\u00b7B per plane (Fig.19c) while the VERTICAL maintains the hyp-ex law until its wedge; Fig.16 doubles included angles over the last third; BOTH planes scheduled to ONE mouth plane sized to Keele width d = 2.54\u00d710\u2077/(\u03b8\u00b7f\u2080) per plane (eq.2 aspect when f\u2080V auto), kr mouth-area floor. Round section = the CE variant: hyp-ex throat, eq.(7) directivity-matched conical join, 80\u00b0 last-third flare.',
         biradial: 'Biradial \u2014 Arai optimized (built from Yuichi Arai\u2019s public plans + the open A-290 BEM study): sidewall is Yuichi\u2019s ARC through the throat and mouth end points with END tangent = covH/2 (the 95\u00b0 construction line) \u2014 flat before curving out; its chord runs at \u22480.78\u00b7covH/2. Vertical solves the hyp-ex area law (rect accounting); round\u2192square throat, no pinch; kr = 1 loading mouth. Fin layout (optional, in stats): 6 fins, gaps 7.5/15/15/15/7.5\u00b0 scaled by covH/95, one common origin. Round the mouth generously (wrap slider) \u2014 the study\u2019s first-priority improvement.',
-        wn: 'William Neile-inspired biradial \u2014 FULLY PARAMETRIC. Horizontal: cone + true Neile semicubical term (a = r\u209c + tan\u03b8\u2080\u00b7z + K\u00b7z^1.5) through the control zone, then a C1 Hermite terminal flare to dimensionless mouth laws. Vertical: the hypex construction-wavefront area law computed from YOUR fc and T through the loading zone (u\u2097), control blend to u\u1d04, Hermite terminal flare. Every horizontal trajectory is solved to identical arc length (the equal-path property). Fourteen dimensionless \u03bc-linear coefficients; two reference geometries verify the model in the test suite only. Finless is the reference form. Named for William Neile, 1657: the first rectification of the semicubical parabola.',
+        wn: 'William Neile biradial \u2014 a member of the WN horn class (Ahlswede 2021; see PROVENANCE) \u2014 FULLY PARAMETRIC. Horizontal: cone + true Neile semicubical term (a = r\u209c + tan\u03b8\u2080\u00b7z + K\u00b7z^1.5) through the control zone, then a C1 Hermite terminal flare to dimensionless mouth laws. Vertical: the hypex construction-wavefront area law computed from YOUR fc and T through the loading zone (u\u2097), control blend to u\u1d04, Hermite terminal flare. Every horizontal trajectory is solved to identical arc length (the equal-path property). Fourteen dimensionless \u03bc-linear coefficients; two reference geometries verify the model in the test suite only. Finless is the reference form. Named for William Neile, 1657: the first rectification of the semicubical parabola.',
       osc: 'Classic OS waveguide (Geddes, JAES 1989): r(z) = \u221a(r\u209c\u00b2 + (z\u00b7tan\u03b8)\u00b2), \u03b8 = coverage half-angle; Keele-width mouth sizing. The derivation is AXISYMMETRIC (oblate-spheroidal coordinates): a round section is the published solution; an ellipse (per-axis stretch) is the accepted engineering approximation; a SQUARE/rrect section is a geometric extrusion only \u2014 the corner regions have no OS wavefront support. No superellipse termination (see OS-SE for Bat\u00edk\u2019s variant).',
       os: 'OS-SE (Bat\u00edk 2020, formula 5 \u2014 what this family computes): throat angle \u03b1\u2080, expansion k, superellipse termination; Keele-width sized mouth. The classic Geddes 1989 OS (r = \u221a(r\u209c\u00b2 + (z\u00b7tan\u03b8)\u00b2)) exists engine-side; a Classic-OS selector is on the roadmap.',
         rosse: 'R-OSSE (Bat\u00edk 2022): the exact published parametric formula incl. rollback termination \u2014 validated here against the paper\u2019s ST260 reference (a\u2080 = 0 and b = 0 are paper-valid inputs).'
@@ -6337,7 +6367,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     }
     // entry 104: DRIVER MOUNTING PLATE -- solid-mesh families only (interior
     // surfaces are the acoustic export; the rule hides the params there).
-    if (S.plateT > 0 && S.family !== "wn" && S.family !== "biradial" && S.family !== "iwata") {
+    if (S.plateT > 0) {   /* entry 176: plate universal, ALL families (generic prof.H/prof.V bore; entry 152 already re-included iwata -- the sawed exit accepts a plate) */
       var dpd = driverPlateDefaults(S.throatD);
       var pOut = (S.plateD > 0 ? S.plateD : dpd.outerD) / 2;
       var pBC = (S.boltCircleD > 0 ? S.boltCircleD : dpd.bcD) / 2;
@@ -6367,11 +6397,17 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
         var f9 = (zq - A9.z) / (B9.z - A9.z + 1e-12); f9 = Math.max(0, Math.min(1, f9));
         return Math.max(A9.r + f9 * (B9.r - A9.r), AV.r + f9 * (BV.r - AV.r));
       }
-      var rec9 = Math.max(0.4, Math.min(1.0, (S.thick || 6) - 1.5));
+      var rec9 = 0.6;   /* entry 177: the union overlap is a constant (entry 106's 0.6 mm) -- the old thick-coupled recess made the fit drift with wall thickness ("the horn thickness doesn't match the calculation") */
+      function wallItpP9(arr9, zq9) {
+        var iq9 = 1; while (iq9 < arr9.length - 1 && arr9[iq9].z < zq9) iq9++;
+        var A9 = arr9[iq9 - 1], B9 = arr9[iq9];
+        var f9 = (zq9 - A9.z) / Math.max(1e-9, B9.z - A9.z);
+        return A9.r + Math.max(0, Math.min(1, f9)) * (B9.r - A9.r);
+      }
       var boreProf9 = [];
       for (var iBp = 0; iBp <= 4; iBp++) {
         var zBp = S.plateT * iBp / 4;
-        boreProf9.push({ z: zBp, r: wallItp9(zBp) + rec9 });
+        boreProf9.push({ z: zBp, r: wallItpP9(prof.H, zBp) + rec9, rV: wallItpP9(prof.V, zBp) + rec9, n: S.throatShape === "rect" ? 6 : 2 });   /* entry 177: the bore is the horn's true section, not a circle of max(H,V) -- the circle left crescent gaps on H != V families (wn, biradial: the ones just un-gated) */
       }
       if (pBC - pHole > rtP + 1) {                                          // holes must clear the bore
         var pm9 = buildDriverPlate(rtP, pOut, S.plateT, pN, pBC, pHole, S.plateT, 0, boreProf9);   // entry 110: z in [0, plateT], flush with the throat plane
