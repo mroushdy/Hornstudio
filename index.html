@@ -1998,6 +1998,96 @@ function buildIwataRings(horn, segs, flareR, wrap) {
   }
   return { rings: pos, M: M, segs: segs };
 }
+function araiFinBlockage(res, P) {
+  // entry 171 (community report + Arai's own published figure): the fins block
+  // cross-sectional area, so the sidewall must move when the fin mode changes
+  // to preserve the expansion law (his third panel: finless walls pull INWARD,
+  // dotted line). The calibrated walls ARE the 4-fin original (calibration was
+  // against the published finned drawings), so: mode arai4 -> unchanged
+  // (bit-compat); off/on -> adjust by the blockage DELTA relative to arai4.
+  // Per-station blockage: a blade at angle th crosses station z where
+  // z/cos(th) lies in [R0, R1], presenting width finT / cos(th).
+  if (!res || !res.wall || !res.finLayoutArai4) return res;
+  var mode = P.fins || "off";
+  if (mode === "arai4") return res;
+  var fT = P.finT || 10;
+  var wArr = res.wall, n = wArr.length, Lz9 = wArr[n - 1].z || 1;
+  // entry 172 ("there are some issues still with the adaptor length affecting
+  // the horn side walls"): the first pass used a HARD crossing indicator per
+  // blade and +-4-STATION averaging -- station counts are not physical, so at
+  // dense sampling the ramps collapsed into visible steps (a notch right
+  // after the adapter, jags at each blade's entry/exit). v2: smooth in z --
+  // per-blade smoothstep ramps of width 6% of the horn length at entry and
+  // exit, and a smoothstep GATE opening after the adapter (whose linear wedge
+  // must stay untouched, entries 81+83).
+  var rw9 = 25;   // entry 174: FIXED physical ramp width (a %-of-length ramp broke translation invariance across adapter lengths)
+  function ss9(x) { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); }
+  function Bof(layout, z) {
+    if (!layout || !layout.angles) return 0;
+    // entry 174 ("the adaptor should not modify the Yuichi horn at all"): the
+    // blade windows are anchored at the FAN ORIGIN (layout.originZ) -- R0/R1
+    // are radial distances from the fan apex, and the apex translates with the
+    // adapter. The previous window used R cos(th) in ABSOLUTE z, so at long
+    // adapters the blockage landed ~an adapter-length too early, the
+    // adaptL-keyed gate fought it, and the interference drew a square collar
+    // after the adapter. With the origin honored, the window translates with
+    // the horn automatically and NO adapter gate is needed (the fan zone
+    // starts past the wedge by construction).
+    var B = 0, o9 = layout.originZ || 0;
+    for (var bi = 0; bi < layout.angles.length; bi++) {
+      var c = Math.max(0.2, Math.cos(layout.angles[bi] * Math.PI / 180));
+      var zIn = o9 + layout.R0 * c, zOut = o9 + layout.R1 * c;
+      var g = ss9((z - (zIn - rw9)) / (2 * rw9)) * (1 - ss9((z - (zOut - rw9)) / (2 * rw9)));
+      B += g * fT / c;
+    }
+    return B;
+  }
+  var ref = res.finLayoutArai4, tgt = mode === "on" ? res.finLayout : null;
+  var w = wArr;
+  var d = new Array(n);
+  var zJ9 = (P.adaptL || 0);   // junction clamp: protects the ADAPTER (whose linear wedge must stay untouched) from the entry ramp's backward bleed; the horn-side pattern stays origin-anchored and translation-invariant
+  for (var i = 0; i < n; i++) {
+    var gJ9 = ss9((w[i].z - zJ9) / 12);
+    d[i] = gJ9 * ((tgt ? Bof(tgt, w[i].z) : 0) - Bof(ref, w[i].z)) / 2;
+  }
+  // entry 175 ("why is there these two sections of the throat"): near the
+  // throat the blades block up to ~66% of the local channel, so pure width
+  // subtraction demands a wall BELOW the throat -- the old throat-clamp +
+  // monotone guard converted that impossible demand into a FLAT COLLAR (a
+  // 35 mm parallel tube grafted after the adapter: the reported "second
+  // throat"). Arai's own figure deviates MID-BODY and tapers to nothing at
+  // the throat. Mechanism here: a GROWTH FLOOR -- the compensated wall keeps
+  // at least 30% of the reference's expansion everywhere, so the correction
+  // phases in exactly as fast as the opening channel can afford it. Floor ->
+  // 25 mm blur -> floor (the blur removes the floor-engage corner).
+  var rt0 = w[0].r;
+  var aRef9 = new Array(n), aC9 = new Array(n);
+  for (var i3 = 0; i3 < n; i3++) { aRef9[i3] = w[i3].r; aC9[i3] = Math.max(rt0, w[i3].r + d[i3]); }
+  function floor9(arr) {
+    for (var f9 = 1; f9 < n; f9++) arr[f9] = Math.max(arr[f9], arr[f9 - 1] + 0.30 * (aRef9[f9] - aRef9[f9 - 1]));
+    return arr;
+  }
+  floor9(aC9);
+  var dEff9 = new Array(n);
+  for (var b9 = 0; b9 < n; b9++) dEff9[b9] = aC9[b9] - aRef9[b9];
+  var dS9 = new Array(n);
+  for (var s9 = 0; s9 < n; s9++) {
+    var acc9 = 0, wsum9 = 0;
+    for (var t9 = 0; t9 < n; t9++) {
+      var dz9 = Math.abs(w[t9].z - w[s9].z);
+      if (dz9 > 25) continue;
+      var wg9 = 1 - dz9 / 25;
+      acc9 += wg9 * dEff9[t9]; wsum9 += wg9;
+    }
+    dS9[s9] = (acc9 / Math.max(1e-9, wsum9)) * ss9((w[s9].z - zJ9) / 12);   // the blur must not re-import deltas across the junction
+  }
+  for (var u9 = 0; u9 < n; u9++) aC9[u9] = Math.max(rt0, aRef9[u9] + Math.min(0, Math.max(dS9[u9], -(tgt ? 1e9 : 1e9)))) ;
+  for (var u29 = 0; u29 < n; u29++) aC9[u29] = aRef9[u29] + dS9[u29];
+  floor9(aC9);
+  for (var v9 = 0; v9 < n; v9++) w[v9] = { z: w[v9].z, r: Math.max(rt0, aC9[v9]) };
+  res.finWallDelta = dS9;
+  return res;
+}
 function computeFamily(P) {
   var res;
   if (P.family === "swh") res = swhWall(P);
@@ -2009,7 +2099,7 @@ function computeFamily(P) {
   else if (P.family === "wn") res = wnWall(P);       // William Neile-inspired biradial (equal-path construction)
   else if (P.family === "rosse") res = rosseWall(P);
   else if (P.family === "cd") res = P.cdRound ? cdWallRound(P) : cdWall(P);
-  else if (P.family === "biradial") res = araiOptWall(P); // UI family: Arai optimized (2026-07-13)
+  else if (P.family === "biradial") res = araiFinBlockage(araiOptWall(P), P); // UI family: Arai optimized (2026-07-13); entry 171: fin-blockage wall compensation
   else if (P.family === "arai") res = araiWall(P);         // legacy straight-fan wall, preserved + smoke-anchored
   else if (P.family === "cd82") res = keele82Wall(P); // UI-retired 2026-07-13 (replaced by biradial at Marwan's request); preserved + smoke-guarded
   else if (P.family === "jmlcell") res = jmlcEllWall(P);
@@ -4641,7 +4731,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
   function hornParams(petfOverride) {
     return { family: S.family, cdRound: S.family === "cd" && S.section !== "rrect", fc: S.fc, rt: (S.throatShape === "rect" && S.ribW > 0 && S.ribH > 0) ? Math.sqrt(S.ribW * S.ribH / Math.PI) : S.throatD / 2, /* entry 94: rect throat defines the area; rt = area-equivalent */ entryDeg: S.entryDeg, T0: S.T0, adaptL: S.adaptL, aplat: S.aplat, ellMu: S.ellMu, ellSigma: S.ellSigma, decoupeN: S.decoupeN, decoupeP: S.decoupeP, iwExitD: S.iwExitD, wnCovH: S.wnCovH, wnCovV: S.wnCovV, trunc: S.family === "jmlc" ? Math.min(268, S.trunc + S.flareWrap) : S.trunc, /* jmlc: wrap EXTENDS the native roll -- no invented arc */
       petf: petfOverride === undefined ? (S.petf && PETF_FAMILIES[S.family]) : petfOverride,
-      petfShape: S.petfShape, petfRef: S.petfRef, wnUL: S.wnUL, wnUC: S.wnUC, wnFins: S.wnFins, Tadd: S.Tadd, fmult: S.fmult, sOff: S.sOff, cornerR: S.cornerR, covH: S.covH, covV: S.covV, f0: S.f0, f0V: S.f0V, osK: S.osK, osS: S.osS, osN: S.osN, rosR: S.rosR, rosA: S.rosA, rosA0: S.rosA0, rosK: S.rosK, rosRr: S.rosRr, rosB: S.rosB, rosM: S.rosM, rosQ: S.rosQ };
+      petfShape: S.petfShape, petfRef: S.petfRef, wnUL: S.wnUL, wnUC: S.wnUC, wnFins: S.wnFins, fins: S.fins, finT: S.finT,   /* entry 171: the wall law needs the fin mode (blockage compensation) */ Tadd: S.Tadd, fmult: S.fmult, sOff: S.sOff, cornerR: S.cornerR, covH: S.covH, covV: S.covV, f0: S.f0, f0V: S.f0V, osK: S.osK, osS: S.osS, osN: S.osN, rosR: S.rosR, rosA: S.rosA, rosA0: S.rosA0, rosK: S.rosK, rosRr: S.rosRr, rosB: S.rosB, rosM: S.rosM, rosQ: S.rosQ };
   }
   function attachSP(prof, ew) {
     // normalized stereographic projection data (published 2019): coherent radius,
@@ -5363,7 +5453,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       '<select class="psel" id="sectSel" aria-label="Cross-section">' +
       [["ellipse","ellipse (round / Klangfilm)"],["sellipse","superellipse (Lam\u00e9)"],["rrect","rounded rectangle (WN)"]].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === S.section ? " selected" : "") + '>' + o[1] + "</option>"; }).join("") + '</select>' +
       '<select class="psel" id="finsSel" aria-label="Fin pack">' +
-      [["off","Fins: off (Crowe finless)"],["arai4","Fins: 4-fin Arai original (covH/5 cells)"],["on","Fins: 6-fin optimized pack"]].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === S.fins ? " selected" : "") + '>' + o[1] + "</option>"; }).join("") + '</select>' +
+      [["off","Fins: off (blockage-compensated walls)"],["arai4","Fins: 4-fin Arai original (covH/5 cells)"],["on","Fins: 6-fin optimized pack"]].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === S.fins ? " selected" : "") + '>' + o[1] + "</option>"; }).join("") + '</select>' +
       
       '<select class="psel" id="spSel" aria-label="Mouth geometry">' +
       [["flat","flat mouth plane"],["sp","spherical mouth (stereographic proj.)"]].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === S.spProj ? " selected" : "") + '>' + o[1] + "</option>"; }).join("") + '</select>';
@@ -5664,34 +5754,31 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       var perX9 = 2 * Math.PI * Math.sqrt((aM9 * aM9 + bM9 * bM9) / 2);
       var arcOf9 = function (wq) { var s9 = 0; for (var i9 = 1; i9 < wq.length; i9++) { var A9 = wq[i9 - 1], B9 = wq[i9]; s9 += Math.hypot((B9.z !== undefined ? B9.z : B9[0]) - (A9.z !== undefined ? A9.z : A9[0]), (B9.r !== undefined ? B9.r : B9[1]) - (A9.r !== undefined ? A9.r : A9[1])); } return s9; };
       var pathX9 = Math.max(arcOf9(prof9.H), arcOf9(prof9.V)) || lastAct.axialDepth || 200;
-      if (S.family === "wn" && S.flareR > 0.5) pathX9 += S.flareR * (90 + (S.flareWrap || 0)) * Math.PI / 180;   /* entry 169: the roll arc is real meridian length -- without it the wrapped mesh sized COARSER than bare at the same tier (Measurement_5: 4784 vs 5248 elems) */
+      if (S.family === "wn" && S.flareR > 0.5) pathX9 += S.flareR * (90 + (S.flareWrap || 0)) * Math.PI / 180;   /* entry 169: the roll arc is real meridian length */
       var bud9 = (S.bemF || 14333) <= 14333 ? 12000 : ((S.bemF || 14333) === 20000 ? 24000 : 90000);   // entry 128
+      if (S.family === "wn" && S.flareR > 0.5 && lastAct.wn) {   /* entry 173: the entry-169 budget scale ran AFTER bemBandSize had consumed the unscaled budget -- only the path increase took effect, which ALONE shrinks segs (the clamp redistributes scarcity): the "fine run" solved 3168 elems, leaked through the thin curl, and was unusable. Scale BEFORE sizing. */
+        var rB9 = buildWNRings(lastAct, 48, 0, 0), rW9 = buildWNRings(lastAct, 48, S.flareR, S.flareWrap);
+        var gA9 = function (rr9) {
+          var A9 = 0;
+          for (var ia9 = 1; ia9 < rr9.M; ia9++) for (var ja9 = 0; ja9 < 48; ja9++) {
+            var k19 = ((ia9 - 1) * 48 + ja9) * 3, k29 = (ia9 * 48 + ja9) * 3, k39 = (ia9 * 48 + (ja9 + 1) % 48) * 3;
+            var e19 = [rr9.rings[k29] - rr9.rings[k19], rr9.rings[k29 + 1] - rr9.rings[k19 + 1], rr9.rings[k29 + 2] - rr9.rings[k19 + 2]];
+            var e29 = [rr9.rings[k39] - rr9.rings[k19], rr9.rings[k39 + 1] - rr9.rings[k19 + 1], rr9.rings[k39 + 2] - rr9.rings[k19 + 2]];
+            A9 += Math.hypot(e19[1] * e29[2] - e19[2] * e29[1], e19[2] * e29[0] - e19[0] * e29[2], e19[0] * e29[1] - e19[1] * e29[0]);
+          }
+          return A9;
+        };
+        var ratio9b = gA9(rW9) / Math.max(1, gA9(rB9));
+        if (ratio9b > 1.02 && ratio9b < 3) bud9 = Math.round(bud9 * ratio9b);
+      }
       var sz9 = bemBandSize(perX9, pathX9, (S.bemF || 14333), bud9);   // entry 114
       var rings9 = null, ringsBld9 = null;
       if (S.family === "biradial" && lastAct.fan) { rings9 = buildAraiFanRings(lastAct, sz9.segs, 0, 0); ringsBld9 = function (nQ) { return buildAraiFanRings(lastAct, nQ, 0, 0); }; }
       else if (S.family === "wn" && lastAct.wn) {
         rings9 = buildWNRings(lastAct, sz9.segs, S.flareR, S.flareWrap);
         ringsBld9 = function (nQ) { return buildWNRings(lastAct, nQ, S.flareR, S.flareWrap); };
-        // entry 169: WRAP-AWARE BUDGET -- a fixed tier budget spread over the
-        // lip's added surface made the wrapped mesh COARSER than bare at the
-        // same tier (Measurement_5: 4784 elems wrapped vs 5248 bare). Scale
-        // the budget by the measured area ratio so a tier means constant edge
-        // quality regardless of features.
-        if (S.flareR > 0.5) {
-          var rB9 = buildWNRings(lastAct, 48, 0, 0), rW9 = buildWNRings(lastAct, 48, S.flareR, S.flareWrap);
-          function gridArea9(rr9) {
-            var A9 = 0;
-            for (var ia9 = 1; ia9 < rr9.M; ia9++) for (var ja9 = 0; ja9 < 48; ja9++) {
-              var k19 = ((ia9 - 1) * 48 + ja9) * 3, k29 = (ia9 * 48 + ja9) * 3, k39 = (ia9 * 48 + (ja9 + 1) % 48) * 3;
-              var e19 = [rr9.rings[k29] - rr9.rings[k19], rr9.rings[k29 + 1] - rr9.rings[k19 + 1], rr9.rings[k29 + 2] - rr9.rings[k19 + 2]];
-              var e29 = [rr9.rings[k39] - rr9.rings[k19], rr9.rings[k39 + 1] - rr9.rings[k19 + 1], rr9.rings[k39 + 2] - rr9.rings[k19 + 2]];
-              A9 += 0.5 * Math.hypot(e19[1] * e29[2] - e19[2] * e29[1], e19[2] * e29[0] - e19[0] * e29[2], e19[0] * e29[1] - e19[1] * e29[0]) * 2;
-            }
-            return A9;
-          }
-          var ratio9 = gridArea9(rW9) / Math.max(1, gridArea9(rB9));
-          if (ratio9 > 1.02 && ratio9 < 3) sz9.budget = Math.round(sz9.budget * ratio9);
-        }
+        // entry 173: the late budget scaling that lived here was dead code (sz9 already sized) -- moved before bemBandSize
+
       }
       var finM9 = (S.family === "wn" && S.wnFins > 0 && lastAct.wn) ? wnFinMesh(lastAct, S.wnFinT, S.wnClear, 0.03, S.wnFinU1) : null;
       var blab9 = (S.bemTarget === "blab");
