@@ -2557,34 +2557,45 @@ function buildDriverPlate(rt, outerR, T, boltN, bcR, holeR, z0, boreTopR, borePr
 // is locally overridden (standard practice -- the driver's own exit defines
 // this region); everything past 2*exLen is untouched.
 function osVirtualEntry(wall, rt, exDeg, exLen, cov) {
-  // entry 184 (forum report: Classic OS + straight driver entry rippled in
-  // CAD). The generic graft is GEOMETRICALLY DOOMED on the OS: the straight
-  // segment lands BELOW the OS wall, and any C1 catch-up to a 45-degree-
-  // asymptote curve must overshoot the asymptote (measured 48.5 deg peak +
-  // slope reversals -- the reporter's Fusion ripples were ours). Geddes' own
-  // construction instead: re-solve the OS with a VIRTUAL ORIGIN so the
-  // waveguide itself starts at the driver angle -- r(z) = sqrt(rc^2 +
-  // ((z + z0) tan th)^2), z0 = r1 tanA / tan^2 th, rc^2 = r1^2 (1 - tan^2 A
-  // / tan^2 th): r(exLen) = r1 and r'(exLen) = tanA exactly. C1 at the
-  // junction by construction, slope monotone from the driver angle to the
-  // coverage asymptote, overshoot impossible.
-  if (!(exLen > 0) || !wall || wall.length < 8) return wall;
+  // entry 190 (the same reporter, second review: "the correct point (Z=0 /
+  // r=19.5) should actually be your point at (Z=12 / r~20.6)... in addition
+  // the roundover does not work any more"). BOTH RIGHT. (1) The 12 mm cone
+  // is INSIDE HIS DRIVER, behind the mounting flange -- the horn is pure OS
+  // from z=0, launched AT the driver angle: r(0) = rt, r'(0) = tanA (virtual
+  // origin z0 = rt tanA / tan^2 th, rc^2 = rt^2 (1 - tan^2 A / tan^2 th)).
+  // exLen no longer shapes the horn (it described the driver, not the horn).
+  // (2) The v1 rebuild flattened the profile monotone to the LAST radius --
+  // but the profile arrives WITH the mouth roll appended (descending tail),
+  // so the roundover got erased. v2 rebuilds only up to the input's maximum
+  // radius (the true mouth) and re-appends the roll tail translated to the
+  // new mouth position.
+  if (!wall || wall.length < 8) return wall;
   var tanA = Math.tan(exDeg * Math.PI / 180);
   var th = Math.min(70, Math.max(15, cov / 2)) * Math.PI / 180;
   var tth = Math.tan(th);
-  if (tanA >= tth * 0.98) return straightEntry(wall, rt, exDeg, exLen);
-  var r1 = rt + tanA * exLen;
-  var z0 = r1 * tanA / (tth * tth);
-  var rc2 = r1 * r1 * (1 - (tanA * tanA) / (tth * tth));
-  var rEnd = wall[wall.length - 1].r;
-  var out = [], i, zq;
-  for (i = 0; i < wall.length && wall[i].z <= exLen; i++) out.push({ z: wall[i].z, r: rt + tanA * wall[i].z });
-  var zEnd2 = (Math.sqrt(Math.max(1, rEnd * rEnd - rc2)) / tth) - z0 + exLen;
-  var n2 = Math.max(60, wall.length - out.length);
-  for (i = 1; i <= n2; i++) {
-    zq = exLen + (zEnd2 - exLen) * i / n2;
-    out.push({ z: zq, r: Math.sqrt(rc2 + Math.pow((zq - exLen + z0) * tth, 2)) });
+  if (!(tanA > 1e-6)) return wall;                    // no driver angle: untouched
+  if (tanA >= tth * 0.98) return wall;                // degenerate: at/above coverage
+  // entry 190b: the v2 split used the radius MAXIMUM to find the roll -- but
+  // the default flare is a 90-degree FLUSH roll whose radius stays MONOTONE,
+  // so the whole roll read as body and got absorbed into the OS (the
+  // reporter's 994.5 mm "mouth" was the roll's reach flattened in). The split
+  // is STRUCTURAL: baseN = the profile's baseStations (body count); the flare
+  // arc follows. The rebuilt body keeps EXACTLY baseN points so every
+  // downstream consumer of baseStations stays index-valid.
+  var baseN = (typeof exLen === "object" && exLen && exLen.baseN) ? exLen.baseN : (arguments.length > 5 && arguments[5] > 0 ? arguments[5] : wall.length);
+  baseN = Math.min(baseN, wall.length);
+  var body = wall.slice(0, baseN), tail = wall.slice(baseN);
+  var rMouth = body[body.length - 1].r, zMouthOld = body[body.length - 1].z;
+  var z0 = rt * tanA / (tth * tth);
+  var rc2 = rt * rt * (1 - (tanA * tanA) / (tth * tth));
+  var zMouthNew = Math.sqrt(Math.max(1, rMouth * rMouth - rc2)) / tth - z0;
+  var out = [], i;
+  for (i = 0; i < baseN; i++) {
+    var zq = zMouthNew * i / (baseN - 1);
+    out.push({ z: zq, r: Math.sqrt(rc2 + Math.pow((zq + z0) * tth, 2)) });
   }
+  var dz9 = zMouthNew - zMouthOld;
+  for (i = 0; i < tail.length; i++) out.push({ z: tail[i].z + dz9, r: tail[i].r });
   return out;
 }
 function straightEntry(wall, rt, exDeg, exLen) {
@@ -4888,8 +4899,8 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     // entry 104 (Marwan: curved throats are not great for compression drivers):
     // straight driver-exit entry, prof-path law families only (cd designs its
     // own entry; rings families keep their specialized throats).
-    if (S.exitLen > 0 && p9 && p9.H && !p9.azProfiles && S.family !== "cd" && S.family !== "wn" && S.family !== "biradial" && S.family !== "iwata") {
-      p9 = Object.assign({}, p9, S.family === "osc" ? { H: osVirtualEntry(p9.H, p9.H[0].r, S.exitDeg / 2, S.exitLen, S.covH || 90), V: osVirtualEntry(p9.V, p9.V[0].r, S.exitDeg / 2, S.exitLen, S.covV || S.covH || 90) } : { H: straightEntry(p9.H, p9.H[0].r, S.exitDeg / 2, S.exitLen), V: straightEntry(p9.V, p9.V[0].r, S.exitDeg / 2, S.exitLen) });
+    if ((S.exitLen > 0 || (S.family === "osc" && S.exitDeg > 0)) && p9 && p9.H && !p9.azProfiles && S.family !== "cd" && S.family !== "wn" && S.family !== "biradial" && S.family !== "iwata") {
+      p9 = Object.assign({}, p9, S.family === "osc" ? { H: osVirtualEntry(p9.H, p9.H[0].r, S.exitDeg / 2, S.exitLen, S.covH || 90, p9.baseStations || 0), V: osVirtualEntry(p9.V, p9.V[0].r, S.exitDeg / 2, S.exitLen, S.covV || S.covH || 90, p9.baseStations || 0) } : { H: straightEntry(p9.H, p9.H[0].r, S.exitDeg / 2, S.exitLen), V: straightEntry(p9.V, p9.V[0].r, S.exitDeg / 2, S.exitLen) });
     }
     return p9;
   }
@@ -5447,7 +5458,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     { key: "flareR", label: "Mouth roundover R", unit: "mm", min: 0, max: 100, step: 2, sect: "geo", notFams: { jmlc: 1, iwata: 1 } },   /* entry 167: wn un-gated */
     { key: "thick", label: "Wall thickness (3-D)", unit: "mm", min: 2, max: 12, step: 0.5, sect: "geo" },   /* entry 176: universal -- the wn gate hid the control while S.thick silently drove its shell anyway (the entry-152 iwata trap, again) */
     { key: "iwExitD", label: "Driver exit \u00d8 cut (0 = full neck)", unit: "mm", min: 0, max: 76.2, step: 0.1, sect: "geo", fams: { iwata: 1 } },
-    { key: "exitLen", label: "Straight driver entry L (0 = off)", unit: "mm", min: 0, max: 40, step: 1, sect: "geo", notFams: { cd: 1, wn: 1, biradial: 1, iwata: 1 } },
+    { key: "exitLen", label: "Straight driver entry L (0 = off)", unit: "mm", min: 0, max: 40, step: 1, sect: "geo", notFams: { cd: 1, wn: 1, biradial: 1, iwata: 1, osc: 1 } },   /* entry 190: for Classic OS the driver cone is IN the driver -- exitDeg alone launches the OS at the driver angle from z=0 */
     { key: "exitDeg", label: "Driver exit angle (included)", unit: "\u00b0", min: 0, max: 30, step: 0.5, sect: "geo", notFams: { cd: 1, wn: 1, biradial: 1, iwata: 1 } },
     { key: "plateT", label: "Driver plate thickness (0 = off)", unit: "mm", min: 0, max: 40, step: 0.5, sect: "geo" },
     { key: "plateD", label: "Plate outer \u00d8 (0 = auto)", unit: "mm", min: 0, max: 320, step: 1, sect: "geo" },
