@@ -2584,18 +2584,21 @@ function osVirtualEntry(wall, rt, exDeg, exLen, cov) {
   // downstream consumer of baseStations stays index-valid.
   var baseN = (typeof exLen === "object" && exLen && exLen.baseN) ? exLen.baseN : (arguments.length > 5 && arguments[5] > 0 ? arguments[5] : wall.length);
   baseN = Math.min(baseN, wall.length);
-  var body = wall.slice(0, baseN), tail = wall.slice(baseN);
-  var rMouth = body[body.length - 1].r, zMouthOld = body[body.length - 1].z;
+  // entry 193 (v4): recompute r ONLY, on the profile's OWN z stations. v3
+  // resampled each plane over its own zMouthNew grid, which broke the H/V
+  // per-index z-alignment the sections loft requires (invisible at 90x90
+  // where the grids coincide; wrong for elliptical covH != covV). With
+  // shared stations the alignment holds BY CONSTRUCTION, the roll tail
+  // appends verbatim (no z shift), and only its r translates by the small
+  // body-end delta so the arc stays attached.
   var z0 = rt * tanA / (tth * tth);
   var rc2 = rt * rt * (1 - (tanA * tanA) / (tth * tth));
-  var zMouthNew = Math.sqrt(Math.max(1, rMouth * rMouth - rc2)) / tth - z0;
   var out = [], i;
   for (i = 0; i < baseN; i++) {
-    var zq = zMouthNew * i / (baseN - 1);
-    out.push({ z: zq, r: Math.sqrt(rc2 + Math.pow((zq + z0) * tth, 2)) });
+    out.push({ z: wall[i].z, r: Math.sqrt(rc2 + Math.pow((wall[i].z + z0) * tth, 2)) });
   }
-  var dz9 = zMouthNew - zMouthOld;
-  for (i = 0; i < tail.length; i++) out.push({ z: tail[i].z + dz9, r: tail[i].r });
+  var dR9 = out[baseN - 1].r - wall[baseN - 1].r;
+  for (i = baseN; i < wall.length; i++) out.push({ z: wall[i].z, r: wall[i].r + dR9 });
   return out;
 }
 function straightEntry(wall, rt, exDeg, exLen) {
@@ -4948,6 +4951,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
   function isRound() {
     if (S.family === "cd") return S.section !== "rrect";
     if (S.family === "biradial" || S.family === "wn") return false; // biradial mouths get W x H, never a diameter (directive 15)
+    if (S.family === "osc" && (S.covV || S.covH) !== S.covH) return false;   /* entry 193: Classic OS ellipticity comes from covH != covV (independent per-plane Geddes laws) -- the aspect/section check below cannot see it, so elliptical osc read as round and the CSV silently dropped the V wall */
     return S.section === "ellipse" && S.aspect === 1 && !(S.petf && PETF_FAMILIES[S.family] && (S.TaddV !== S.Tadd || S.fmultV !== S.fmult)); }
 
   /* ================= drawing ================= */
@@ -5458,7 +5462,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     { key: "flareR", label: "Mouth roundover R", unit: "mm", min: 0, max: 100, step: 2, sect: "geo", notFams: { jmlc: 1, iwata: 1 } },   /* entry 167: wn un-gated */
     { key: "thick", label: "Wall thickness (3-D)", unit: "mm", min: 2, max: 12, step: 0.5, sect: "geo" },   /* entry 176: universal -- the wn gate hid the control while S.thick silently drove its shell anyway (the entry-152 iwata trap, again) */
     { key: "iwExitD", label: "Driver exit \u00d8 cut (0 = full neck)", unit: "mm", min: 0, max: 76.2, step: 0.1, sect: "geo", fams: { iwata: 1 } },
-    { key: "exitLen", label: "Straight driver entry L (0 = off)", unit: "mm", min: 0, max: 40, step: 1, sect: "geo", notFams: { cd: 1, wn: 1, biradial: 1, iwata: 1, osc: 1 } },   /* entry 190: for Classic OS the driver cone is IN the driver -- exitDeg alone launches the OS at the driver angle from z=0 */
+    { key: "exitLen", label: "Driver entry L (osc: loading only)", unit: "mm", min: 0, max: 40, step: 1, sect: "geo", notFams: { cd: 1, wn: 1, biradial: 1, iwata: 1 } },   /* entry 192: restored for osc as a LOADING-ONLY term -- the driver internal cone enters the Webster area law behind z=0, never the exported geometry (the reporter said this info is crucial for loading; honored precisely) */
     { key: "exitDeg", label: "Driver exit angle (included)", unit: "\u00b0", min: 0, max: 30, step: 0.5, sect: "geo", notFams: { cd: 1, wn: 1, biradial: 1, iwata: 1 } },
     { key: "plateT", label: "Driver plate thickness (0 = off)", unit: "mm", min: 0, max: 40, step: 0.5, sect: "geo" },
     { key: "plateD", label: "Plate outer \u00d8 (0 = auto)", unit: "mm", min: 0, max: 320, step: 1, sect: "geo" },
@@ -5516,10 +5520,24 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       var _fr2 = document.getElementById("frchart"); if (_fr2) _fr2.innerHTML = frChartSVG(actProf.spApplied ? profOf(lastAct, 300) : actProf, col);
     } else {
       if (lastAct) lastAct.websterCoordinateLength = lastAct.axialDepth || null;
-      document.getElementById("zchart").innerHTML = zChartSVG(throatImpedance(actProf.spApplied ? profOf(lastAct, 300) : actProf, fArr, "axial"), col);
-      var _sp3 = document.getElementById("spchart"); if (_sp3) _sp3.innerHTML = splChartSVG(hornResponse(actProf.spApplied ? profOf(lastAct, 300) : actProf, fArr, "axial"), col);
-      var _gd3 = document.getElementById("gdchart"); if (_gd3) _gd3.innerHTML = gdChartSVG(hornResponse(actProf.spApplied ? profOf(lastAct, 300) : actProf, fArr, "axial"), col);
-      var _fr3 = document.getElementById("frchart"); if (_fr3) _fr3.innerHTML = frChartSVG(actProf.spApplied ? profOf(lastAct, 300) : actProf, col);
+      var chartProf3 = actProf.spApplied ? profOf(lastAct, 300) : actProf;
+      if (S.family === "osc" && S.exitLen > 0 && S.exitDeg > 0 && chartProf3 && chartProf3.H) {
+        /* entry 192: the driver INTERNAL cone as a LOADING-ONLY prepend -- the
+           Webster area law extends behind z=0 through the driver bore to the
+           phase plug (his original point: "crucial for accurately calculating
+           loading"); the exported geometry never contains it. */
+        var tA3 = Math.tan((S.exitDeg / 2) * Math.PI / 180), eL3 = S.exitLen;
+        function pre3(arr3) {
+          var rt3 = arr3[0].r, out3 = [];
+          for (var q3 = 6; q3 >= 1; q3--) { var zc3 = -eL3 * q3 / 6; out3.push({ z: zc3, r: Math.max(1, rt3 + zc3 * tA3) }); }
+          return out3.concat(arr3.map(function (p3) { return p3; }));
+        }
+        chartProf3 = Object.assign({}, chartProf3, { H: pre3(chartProf3.H), V: pre3(chartProf3.V), baseStations: (chartProf3.baseStations || 0) + 6 });
+      }
+      document.getElementById("zchart").innerHTML = zChartSVG(throatImpedance(chartProf3, fArr, "axial"), col);
+      var _sp3 = document.getElementById("spchart"); if (_sp3) _sp3.innerHTML = splChartSVG(hornResponse(chartProf3, fArr, "axial"), col);
+      var _gd3 = document.getElementById("gdchart"); if (_gd3) _gd3.innerHTML = gdChartSVG(hornResponse(chartProf3, fArr, "axial"), col);
+      var _fr3 = document.getElementById("frchart"); if (_fr3) _fr3.innerHTML = frChartSVG(chartProf3, col);
     }
     // REPORTS: beamwidth + DI geometric estimates (Keele mouth-size relation reversed)
     (function () {
@@ -6108,7 +6126,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       var hvActive = S.petf && PETF_FAMILIES[S.family] && (S.TaddV !== S.Tadd || S.fmultV !== S.fmult);
       if (hvActive && (p.key === "aspect" || p.key === "flareR" || p.key === "flareWrap" || p.key === "cornerR" || p.key === "seN")) ok = false; // az-loft: per-plane PETF params ARE the shaping; rollbacks are the mouth
       if ((p.key === "ribW" || p.key === "ribH" || p.key === "ribL") && (S.family === "wn" || S.family === "biradial" || S.family === "iwata")) ok = false;   // entry 101: specialized throats
-      if (p.key === "exitDeg" && !(S.exitLen > 0)) ok = false;   // entry 104: sub-params follow their master (the rule)
+      if (p.key === "exitDeg" && !(S.exitLen > 0) && S.family !== "osc") ok = false;   // entry 104: sub-params follow their master; entry 192: EXCEPT osc, where the angle IS the master (it launches the OS from z=0)
       if ((p.key === "plateD" || p.key === "boltN" || p.key === "boltCircleD" || p.key === "boltHoleD" || p.key === "boltRot") && !(S.plateT > 0)) ok = false;
       if ((p.key === "ribW" || p.key === "ribH") && S.throatShape !== "rect") ok = false;   // entry 93: the toggle drives them
       if (p.key === "ribL" && S.throatShape === "round") ok = false;
