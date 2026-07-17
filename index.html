@@ -6476,7 +6476,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       box.addEventListener("pointerup", function () { dragging = false; box.style.cursor = "grab"; });
       box.addEventListener("wheel", function (e) { e.preventDefault();
         V3.dist *= (1 + Math.sign(e.deltaY) * 0.1);
-        V3.dist = Math.max((V3.fit || 200) * 0.5, Math.min((V3.fit || 800) * 5, V3.dist)); }, { passive: false });
+        V3.dist = Math.max((V3.fit || 200) * 0.04, Math.min((V3.fit || 800) * 6, V3.dist)); }, { passive: false });   /* entry 194 (Marwan: "sometimes you cant zoom enough"): zoom-in floor was fit/2 -- half the fitted view on an 800 mm horn still keeps the throat at arm's length. Now fit*0.04 (12x closer), zoom-out fit*6. */
       V3.ok = true;
       if (note) note.textContent = "";
       (function loop() { requestAnimationFrame(loop); if (!V3.ok) return;
