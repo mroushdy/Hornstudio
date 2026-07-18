@@ -2322,7 +2322,29 @@ function planeProfiles(wall, nPts, A, flareRh, flareRv, flareExit, shape, rho, r
     var u = cum[i] / total, w = u * u * (3 - 2 * u);
     var Ai = 1 + (A - 1) * w, a, b;
     if (shape === "rrect") {
-      var rhoT = rho + (Math.max(0.5, rhoM === undefined ? rho : rhoM) - rho) * w;               // corner radius grows throat -> mouth
+      // entry 199 (Mike's fins, ROOT CAUSE): the ramp was ABSOLUTE from the
+      // THROAT radius -- but the horn flares away from rt immediately, so one
+      // station in, a - rho is already large and the section is a rectangle
+      // with big corners: the morph starts at full speed instead of staying
+      // circular near the throat, and the interpolating NURBS turns that
+      // instant onset into azimuthal pleats. RELATIVE ramp: from the LOCAL
+      // round-equivalent radius, so w = 0 gives an exact circle at EVERY
+      // station and w = 1 lands the identical mouth.
+      /* entry 204 (Marwan: "still not sharp where the 4 sides meet" -- and the
+         measurement agreed: median corner-normal break mid-horn was 7.6 deg
+         because rhoT still ran the SAME leisurely smoothstep as the shape
+         morph, keeping the corner an arc of half the section radius at half
+         the length; sharpness only arrived at the mouth). Classical rect-
+         section craft transitions round-to-sharp in the first third, then
+         runs sharp edges. PACING: when the corner target is small, the rho
+         ramp completes by u = 0.35; large targets keep the original schedule
+         (sharpness = clamp(1 - target/40): target 0 -> early completion,
+         target >= 40 -> unchanged). Area per station preserved either way. */
+      var rhoTarget4 = Math.max(0, rhoM === undefined ? rho : rhoM);
+      var sharp4 = Math.max(0, Math.min(1, 1 - rhoTarget4 / 40));
+      var uT4 = 1 + (0.35 - 1) * sharp4;
+      var uR4 = Math.min(1, u / uT4), wR4 = uR4 * uR4 * (3 - 2 * uR4);
+      var rhoT = P[i].r + (rhoTarget4 - P[i].r) * wR4;
       var ab = (Math.PI * P[i].r * P[i].r + (4 - Math.PI) * rhoT * rhoT) / 4;
       b = Math.sqrt(ab / Ai); a = ab / b;
       if (rhoT > Math.min(a, b)) {                               // clamp + one re-solve for exact area
@@ -2375,19 +2397,37 @@ function sectionPoint(shape, a, b, rho, u) {
     var th = 2 * Math.PI * u, c = Math.cos(th), s = Math.sin(th);
     return { x: a * c, y: b * s, wH: c * c };
   }
-  // feature-anchored sampling: per quadrant, corner gets 3/4 of the vertices
-  // (all curvature lives there); straight half-sides get 1/8 each.
+  // entry 206 (Marwan: "the back of the horn... a lot of errors" after the
+  // sharp-corner pacing): the old allocation gave the corner 3/4 of the
+  // vertices unconditionally -- right for a WN-ish rounded rect, catastrophic
+  // when rho -> 0: 32 of 48 samples landed COINCIDENT on the four corner
+  // points, degenerate quads zeroed the offset normals, and the outer shell
+  // collapsed onto the inner in stripes. ARC-LENGTH-ADAPTIVE allocation: per
+  // quadrant half, samples split between the flat and the half-arc by their
+  // true lengths; the corner stays PINNED at vv = 0.5 (one exact vertex --
+  // the crease machinery of entries 202/204 depends on that fixed index). At
+  // large rho this approximates the old corner-heavy spirit; at rho 0 the
+  // flats inherit the samples and exactly one vertex sits on the corner.
   rho = Math.min(rho, 0.999 * Math.min(a, b)); // a rounded rectangle cannot have rho > min(a,b)
   var sh = Math.max(0.02, a - rho), sv = Math.max(0.02, b - rho);
   u = ((u % 1) + 1) % 1;
   var q = Math.floor(u * 4), v = u * 4 - q;
-  // quadrant-0 point (from (a,0) CCW to (0,b))
   var x, y, wH, t;
   var vv = (q === 1 || q === 3) ? 1 - v : v; // mirrored quadrants traverse reversed
-  if (vv < 0.125) { x = a; y = sv * (vv * 8); wH = 1; }
-  else if (vv < 0.875) { t = (vv - 0.125) / 0.75 * Math.PI / 2;
-    x = sh + rho * Math.cos(t); y = sv + rho * Math.sin(t); wH = Math.cos(t) * Math.cos(t); }
-  else { x = sh * (1 - (vv - 0.875) * 8); y = b; wH = 0; }
+  var arcQ = rho * Math.PI / 4;              // half-arc length
+  var b1 = sv / Math.max(1e-9, sv + arcQ);   // first-half breakpoint: flat | half-arc
+  var b2 = arcQ / Math.max(1e-9, arcQ + sh); // second-half breakpoint: half-arc | flat
+  if (vv < 0.5) {
+    var h1 = vv * 2;
+    if (h1 < b1) { x = a; y = sv * (h1 / Math.max(1e-9, b1)); wH = 1; }
+    else { t = (h1 - b1) / Math.max(1e-9, 1 - b1) * Math.PI / 4;
+      x = sh + rho * Math.cos(t); y = sv + rho * Math.sin(t); wH = Math.cos(t) * Math.cos(t); }
+  } else {
+    var h2 = (vv - 0.5) * 2;
+    if (h2 < b2) { t = Math.PI / 4 + h2 / Math.max(1e-9, b2) * Math.PI / 4;
+      x = sh + rho * Math.cos(t); y = sv + rho * Math.sin(t); wH = Math.cos(t) * Math.cos(t); }
+    else { x = sh * (1 - (h2 - b2) / Math.max(1e-9, 1 - b2)); y = b; wH = 0; }
+  }
   if (q === 1) x = -x;
   else if (q === 2) { x = -x; y = -y; }
   else if (q === 3) y = -y;
@@ -2763,6 +2803,42 @@ function buildRings(prof, segs) {
   }
   return inner;
 }
+// entry 203 (Marwan: "the throat is still rounded on the driver side edge"
+// -- after 201 flattened the GEOMETRY, the SHADING still rounded it: the flat
+// annulus shares vertices with the wall and the outer shell, and averaged
+// vertex normals bend the lighting into a fillet that is not there). Pure
+// helper: duplicate every throat-plane vertex that is shared between planar
+// (annulus) and non-planar triangles; the planar triangles reference the
+// duplicates, so normal averaging stops at the crease. Geometry unchanged.
+function creaseThroatRows(pos, idx) {
+  var nV = pos.length / 3, onPlane = new Uint8Array(nV), i;
+  for (i = 0; i < nV; i++) if (Math.abs(pos[i * 3]) < 0.01) onPlane[i] = 1;
+  var planarTri = new Uint8Array(idx.length / 3);
+  var mixedUse = new Uint8Array(nV);
+  for (i = 0; i < idx.length; i += 3) {
+    var p3 = onPlane[idx[i]] && onPlane[idx[i + 1]] && onPlane[idx[i + 2]];
+    planarTri[i / 3] = p3 ? 1 : 0;
+    if (!p3) { mixedUse[idx[i]] |= 2; mixedUse[idx[i + 1]] |= 2; mixedUse[idx[i + 2]] |= 2; }
+  }
+  for (i = 0; i < idx.length; i += 3)
+    if (planarTri[i / 3]) { mixedUse[idx[i]] |= 1; mixedUse[idx[i + 1]] |= 1; mixedUse[idx[i + 2]] |= 1; }
+  var extra = [], remap = {}, out = new Uint32Array(idx.length);
+  out.set(idx);
+  for (i = 0; i < idx.length; i += 3) {
+    if (!planarTri[i / 3]) continue;
+    for (var e = 0; e < 3; e++) {
+      var v = idx[i + e];
+      if (mixedUse[v] === 3) {
+        if (!(v in remap)) { remap[v] = nV + extra.length / 3; extra.push(pos[v * 3], pos[v * 3 + 1], pos[v * 3 + 2]); }
+        out[i + e] = remap[v];
+      }
+    }
+  }
+  if (!extra.length) return { pos: pos, idx: out, added: 0 };
+  var np = new Float32Array(pos.length + extra.length);
+  np.set(pos); np.set(extra, pos.length);
+  return { pos: np, idx: out, added: extra.length / 3 };
+}
 function buildSolidMesh(prof, t, segs, ringsOv, lipStyle) {
   var H = prof.H, V = prof.V, M = ringsOv ? ringsOv.M : H.length, i, j;
   var RO = (lipStyle === 'straight') ? 1 : 28; // entry 111: straight = flat end face; rounded = 28 steps (smoother than 20)
@@ -2776,13 +2852,36 @@ function buildSolidMesh(prof, t, segs, ringsOv, lipStyle) {
       var ip = Math.max(0, i - 1) * segs + j, iq = Math.min(M - 1, i + 1) * segs + j;
       var jp = i * segs + ((j - 1 + segs) % segs), jq = i * segs + ((j + 1) % segs);
       var tix = inner[iq * 3] - inner[ip * 3], tiy = inner[iq * 3 + 1] - inner[ip * 3 + 1], tiz = inner[iq * 3 + 2] - inner[ip * 3 + 2];
-      var tjx = inner[jq * 3] - inner[jp * 3], tjy = inner[jq * 3 + 1] - inner[jp * 3 + 1], tjz = inner[jq * 3 + 2] - inner[jp * 3 + 2];
-      var nx = tjy * tiz - tjz * tiy, ny = tjz * tix - tjx * tiz, nz = tjx * tiy - tjy * tix;
+      /* entry 206b: at a crease, one central-difference normal SMEARS the
+         corner; the offset needs the true dihedral. Left and right azimuthal
+         tangents give the two face normals; the averaged direction is their
+         normalized sum, and the MITER scale 1/cos(half-dihedral) -- capped at
+         1.5 -- keeps the wall at full thickness across the corner instead of
+         t/sqrt(2). Smooth regions: dihedral ~0, miter 1, bit-identical. */
+      var tLx = inner[k0] - inner[jp * 3], tLy = inner[k0 + 1] - inner[jp * 3 + 1], tLz = inner[k0 + 2] - inner[jp * 3 + 2];
+      var tRx = inner[jq * 3] - inner[k0], tRy = inner[jq * 3 + 1] - inner[k0 + 1], tRz = inner[jq * 3 + 2] - inner[k0 + 2];
+      function cx9(ax, ay, az) {
+        var vx = ay * tiz - az * tiy, vy = az * tix - ax * tiz, vz = ax * tiy - ay * tix;
+        var vl = Math.hypot(vx, vy, vz) || 1e-12;
+        return [vx / vl, vy / vl, vz / vl];
+      }
+      var nL9 = cx9(tLx, tLy, tLz), nR9 = cx9(tRx, tRy, tRz);
+      var nx = nL9[0] + nR9[0], ny = nL9[1] + nR9[1], nz = nL9[2] + nR9[2];
       var nl = Math.hypot(nx, ny, nz) || 1e-12;
       nrm[k0] = nx / nl; nrm[k0 + 1] = ny / nl; nrm[k0 + 2] = nz / nl;
-      outer[k0] = inner[k0] + t * nrm[k0];
-      outer[k0 + 1] = inner[k0 + 1] + t * nrm[k0 + 1];
-      outer[k0 + 2] = inner[k0 + 2] + t * nrm[k0 + 2];
+      var dotLR9 = Math.max(-1, Math.min(1, nL9[0] * nR9[0] + nL9[1] * nR9[1] + nL9[2] * nR9[2]));
+      var mit9 = Math.min(1.5, 1 / Math.max(0.667, Math.sqrt((1 + dotLR9) / 2)));
+      outer[k0] = inner[k0] + t * mit9 * nrm[k0];
+      outer[k0 + 1] = inner[k0 + 1] + t * mit9 * nrm[k0 + 1];
+      outer[k0 + 2] = inner[k0 + 2] + t * mit9 * nrm[k0 + 2];
+      /* entry 201 (Marwan: removing the driver plate curved the throat rim):
+         the outer shell offsets along the wall normal, which tilts ~5 deg at
+         the throat -- the outer throat ring dipped to z = -0.56, curling the
+         driver MATING FACE behind the throat plane. Without a plate the horn
+         itself is the mating surface: the outer ring 0 lands ON z = 0, so the
+         throat annulus is a flat machinable face. (With a plate, the plate
+         path replaces this region and already provides the flat face.) */
+      if (i === 0 && outer[k0] < 0) outer[k0] = 0;   /* component 0 = AXIAL in the rings layout -- the first version clamped +2 (lat2) and zeroed the bottom half laterally */
     }
   // vertex layout: [inner rings][roundover rings 1..RO-1][outer rings]
   var nRound = (RO - 1) * segs;
@@ -4664,13 +4763,22 @@ function stepFromNurbs(sf, name) {
     var ks9 = knotStr(kk);
     return E9("B_SPLINE_CURVE_WITH_KNOTS('',3,(" + ids9.join(",") + "),.UNSPECIFIED.,.F.,.F.," + ks9.m + "," + ks9.k + ",.UNSPECIFIED.)");
   }
+  /* entry 205 (Marwan: "when I import the step file to rhino I am seeing a
+     bunch of lines"): the surface is a CLOSED TUBE flattened to a patch --
+     its v = 0 and v = 1 borders are the SAME physical seam. The old writer
+     emitted them as two DISTINCT coincident edges, which is non-manifold
+     topology by the STEP rules: Fusion heals it silently, Rhino rejects the
+     face and imports only the boundary curves. The lawful seamed-tube
+     topology: THREE edges (throat ring closed on itself, mouth ring closed
+     on itself, one seam), the seam traversed twice with opposite senses. */
   var cu0 = curve(sf.ctrl[0], sf.kV);                                        // u = 0 (throat ring)
   var cu1 = curve(sf.ctrl[sf.nu - 1], sf.kV);                                // u = 1 (mouth ring)
-  var cv0 = curve(sf.ctrl.map(function (r) { return r[0]; }), sf.kU);        // v = 0 seam
-  var cv1 = curve(sf.ctrl.map(function (r) { return r[sf.nv - 1]; }), sf.kU); // v = 1 seam
+  var cv0 = curve(sf.ctrl.map(function (r) { return r[0]; }), sf.kU);        // the ONE seam
   function edge(vA, vB, cId) { return E9("EDGE_CURVE('',#" + vA + ",#" + vB + ",#" + cId + ",.T.)"); }
-  var e0 = edge(v00, v01, cu0), e1 = edge(v01, v11, cv1), e2 = edge(v10, v11, cu1), e3 = edge(v00, v10, cv0);
-  var loop = E9("EDGE_LOOP('',(#" + E9("ORIENTED_EDGE('',*,*,#" + e0 + ",.T.)") + ",#" + E9("ORIENTED_EDGE('',*,*,#" + e1 + ",.T.)") + ",#" + E9("ORIENTED_EDGE('',*,*,#" + e2 + ",.F.)") + ",#" + E9("ORIENTED_EDGE('',*,*,#" + e3 + ",.F.)") + "))");
+  var eThroat = edge(v00, v00, cu0);   // closed ring: start = end vertex
+  var eMouth = edge(v10, v10, cu1);    // closed ring
+  var eSeam = edge(v00, v10, cv0);     // throat-seam vertex -> mouth-seam vertex
+  var loop = E9("EDGE_LOOP('',(#" + E9("ORIENTED_EDGE('',*,*,#" + eSeam + ",.T.)") + ",#" + E9("ORIENTED_EDGE('',*,*,#" + eMouth + ",.T.)") + ",#" + E9("ORIENTED_EDGE('',*,*,#" + eSeam + ",.F.)") + ",#" + E9("ORIENTED_EDGE('',*,*,#" + eThroat + ",.F.)") + "))");
   var face = E9("ADVANCED_FACE('',(#" + E9("FACE_OUTER_BOUND('',#" + loop + ",.T.)") + "),#" + surf + ",.T.)");
   var shell = E9("OPEN_SHELL('',(#" + face + "))");
   var model = E9("SHELL_BASED_SURFACE_MODEL('" + name + "',(#" + shell + "))");
@@ -5067,6 +5175,18 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
         '<text x="' + esc(mx + 32) + '" y="' + esc((y0 + myb) / 2 + 3) + '" font-size="10" fill="' + colV + '" stroke="none">H/2 = ' + fmt(lastV.r) + '</text>';
     }
     svg += '</g>';
+    /* entry 196 (Marwan: "I do not see any changes... after moving them"):
+       the virtual-origin launch changes the first centimeters by MILLIMETERS
+       -- real (CSV-proven: +1..4 mm at exitDeg 25) but two pixels at full-
+       horn zoom. The dashed driver-angle tangent makes the dial legible: it
+       moves with exitDeg, and the wall visibly departs tangent to it. */
+    if (S.family === "osc" && S.exitDeg > 0) {
+      var tA6 = Math.tan((S.exitDeg / 2) * Math.PI / 180);
+      var zT6 = Math.min(80, (actProf.H[actProf.H.length - 1].z || 400) * 0.18);
+      svg += '<line x1="' + esc(X(0)) + '" y1="' + esc(Y(rt)) + '" x2="' + esc(X(zT6)) + '" y2="' + esc(Y(rt + zT6 * tA6)) + '" stroke="var(--ink)" stroke-width="0.8" stroke-dasharray="4,3" opacity="0.55"/>' +
+             '<line x1="' + esc(X(0)) + '" y1="' + esc(Y(-rt)) + '" x2="' + esc(X(zT6)) + '" y2="' + esc(Y(-(rt + zT6 * tA6))) + '" stroke="var(--ink)" stroke-width="0.8" stroke-dasharray="4,3" opacity="0.55"/>' +
+             '<text x="' + esc(X(zT6) + 4) + '" y="' + esc(Y(rt + zT6 * tA6) + 3) + '" font-size="8.5" font-family="var(--mono)" fill="var(--faint)">driver ' + S.exitDeg + '\u00b0 tangent</text>';
+    }
     svg += '<text x="' + esc(X(0) + 6) + '" y="' + esc(Y(rt) - 20) + '" text-anchor="start" font-size="10" font-family="var(--mono)" fill="var(--ink)">' + (S.throatShape === "rect" && S.ribW > 0 ? "rect " + fmt(S.ribW, 1) + " \u00d7 " + fmt(S.ribH, 1) + " (\u00d8-eq " + fmt(rt * 2, 2) + ") \u2014 profiles show the rect half-widths" : "\u00d8" + fmt(rt * 2, 2) + " throat") + '</text>';
     if (!isRound()) {
       svg += '<text x="' + esc(X(0) + 10) + '" y="' + esc(y0 - 10) + '" font-size="9" font-family="var(--mono)" fill="' + col + '" letter-spacing="1">\u2014 HORIZONTAL PLANE (WIDTH)</text>';
@@ -5534,7 +5654,14 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
         }
         chartProf3 = Object.assign({}, chartProf3, { H: pre3(chartProf3.H), V: pre3(chartProf3.V), baseStations: (chartProf3.baseStations || 0) + 6 });
       }
-      document.getElementById("zchart").innerHTML = zChartSVG(throatImpedance(chartProf3, fArr, "axial"), col);
+      var zHtml3 = zChartSVG(throatImpedance(chartProf3, fArr, "axial"), col);
+      if (S.family === "osc" && S.exitLen > 0 && S.exitDeg > 0) {
+        /* entry 197: the bore's acoustic effect at realistic lengths is ~1%
+           (real, honest, and invisible at chart scale) -- so the chart
+           DECLARES the model state instead of pretending drama */
+        zHtml3 = zHtml3.replace('</svg>', '<text x="10" y="14" font-size="9" font-family="var(--mono)" fill="var(--faint)" letter-spacing="0.06em">LOADING INCL. DRIVER BORE ' + S.exitLen + ' mm @ ' + S.exitDeg + '\u00b0</text></svg>');
+      }
+      document.getElementById("zchart").innerHTML = zHtml3;
       var _sp3 = document.getElementById("spchart"); if (_sp3) _sp3.innerHTML = splChartSVG(hornResponse(chartProf3, fArr, "axial"), col);
       var _gd3 = document.getElementById("gdchart"); if (_gd3) _gd3.innerHTML = gdChartSVG(hornResponse(chartProf3, fArr, "axial"), col);
       var _fr3 = document.getElementById("frchart"); if (_fr3) _fr3.innerHTML = frChartSVG(chartProf3, col);
@@ -5636,7 +5763,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       '<main>' +
       '<div style="padding:12px 16px;border-bottom:1px solid var(--line)"><div class="eyebrow" style="margin-bottom:6px">3-D PREVIEW \u2014 DRAG ROTATE \u00b7 WHEEL ZOOM <button class="btn" id="showConstr" style="display:none;width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">SHOW CONSTRUCTION</button><button class="btn" id="dirOvBtn" style="width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">DIRECTIVITY: OFF</button><button class="btn" id="bemPrevBtn" style="width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">BEM MESH: OFF</button></div>' +
       '<div id="view3d" style="width:100%;height:380px;background:#FFFFFF;touch-action:none;cursor:grab"></div>' +
-      '<div id="v3dnote" style="font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:6px;letter-spacing:.04em"></div></div>' +
+      '<span id="buildstamp" style="font-family:var(--mono);font-size:9px;color:var(--faint);letter-spacing:0.08em">build 206 · 2026-07-18</span><div id="v3dnote" style="font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:6px;letter-spacing:.04em"></div></div>' +
       '<div id="drawing" style="padding:10px 12px 0"></div>' +
       '<div class="legend" id="legend"></div><div class="stats" id="stats"></div>' +
       '<div style="padding:14px 16px 0 16px"><div class="eyebrow">REPORTS \u2014 1-D / GEOMETRIC ESTIMATES (NOT A BEM SUBSTITUTE)</div></div>' +
@@ -5720,6 +5847,16 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     }
     document.getElementById("familySel").addEventListener("change", function (e) {
       S.family = e.target.value;
+      /* entry 200 (Marwan's screenshot: a JMLC throat wearing the previous osc
+         session's 10.5-degree driver cone): driver-entry settings are
+         PER-FAMILY decisions -- carried across a family switch they silently
+         corrupt the new family's throat. Reset on every family change; the
+         user re-enters them deliberately if the new horn's driver needs them. */
+      ["exitDeg", "exitLen", "flareRV"].forEach(function (k0) {
+        S[k0] = 0;
+        var n0 = document.getElementById("num_" + k0), r0 = document.getElementById("rng_" + k0);
+        if (n0) n0.value = 0; if (r0) r0.value = 0;
+      });
       applyFamilyDefaults(false);
       syncSymEligibility();   // entry 149 (Thommy: quarter silently fell back to full for WN)
       scheduleUpdate();
@@ -6565,6 +6702,63 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     var g = new THREE.BufferGeometry();
     g.setAttribute("position", new THREE.BufferAttribute(m.pos, 3));
     g.setIndex(new THREE.BufferAttribute(m.idx, 1));
+    /* entry 202: at cornerR ~0 with a rect section, the four corner columns
+       are TRUE CREASES -- averaged vertex normals shade them as a fillet that
+       does not exist (the exported geometry measures sharp to 0.000 mm; the
+       NURBS to ~1.3 mm effective). Splitting the corner-column vertices lets
+       the shading show the edge that is really there; geometry unchanged. */
+    /* entry 203: the throat driver-face crease -- universal for solid
+       families (the flat annulus must SHADE flat, not just BE flat) */
+    if (g.index && S.family !== "wn" && S.family !== "biradial") {
+      var ct3 = creaseThroatRows(g.attributes.position.array, g.index.array);
+      if (ct3.added) {
+        g.setAttribute("position", new THREE.BufferAttribute(ct3.pos, 3));
+        g.setIndex(Array.from(ct3.idx));
+      }
+    }
+    if (S.section === "rrect" && S.cornerR < 0.5 && g.index) {
+      var posA2 = g.attributes.position.array, idxA2 = Array.from(g.index.array);
+      var nV2 = posA2.length / 3;
+      var rBest2 = {}, rMax2 = {};
+      for (var q2 = 0; q2 < nV2; q2++) {
+        var xx2 = posA2[q2 * 3 + 1], yy2 = posA2[q2 * 3 + 2];
+        var quad2 = (xx2 >= 0 ? "P" : "N") + (yy2 >= 0 ? "P" : "N");
+        var rr2 = Math.abs(xx2) + Math.abs(yy2);
+        if (!(quad2 in rMax2) || rr2 > rMax2[quad2]) { rMax2[quad2] = rr2; rBest2[quad2] = Math.atan2(yy2, xx2); }
+      }
+      var creaseA2 = Object.values(rBest2);
+      var isCrease2 = new Uint8Array(nV2);
+      for (q2 = 0; q2 < nV2; q2++) {
+        var a2c = Math.atan2(posA2[q2 * 3 + 2], posA2[q2 * 3 + 1]);
+        for (var c2 = 0; c2 < creaseA2.length; c2++) {
+          var d2 = Math.abs(a2c - creaseA2[c2]); if (d2 > Math.PI) d2 = 2 * Math.PI - d2;
+          if (d2 < 0.02) { isCrease2[q2] = 1; break; }
+        }
+      }
+      var extra2 = [], remap2 = {};
+      for (var t2 = 0; t2 < idxA2.length; t2 += 3) {
+        // split: triangles whose centroid sits CCW of the crease get duplicates
+        for (var e2 = 0; e2 < 3; e2++) {
+          var vi2 = idxA2[t2 + e2];
+          if (!isCrease2[vi2]) continue;
+          var ox2 = 0, oy2 = 0;
+          for (var e3 = 0; e3 < 3; e3++) { if (e3 !== e2) { ox2 += posA2[idxA2[t2 + e3] * 3 + 1]; oy2 += posA2[idxA2[t2 + e3] * 3 + 2]; } }
+          var aV2 = Math.atan2(posA2[vi2 * 3 + 2], posA2[vi2 * 3 + 1]);
+          var aO2 = Math.atan2(oy2 / 2, ox2 / 2);
+          var dd2 = aO2 - aV2; if (dd2 > Math.PI) dd2 -= 2 * Math.PI; if (dd2 < -Math.PI) dd2 += 2 * Math.PI;
+          if (dd2 > 0) {
+            if (!(vi2 in remap2)) { remap2[vi2] = nV2 + extra2.length / 3; extra2.push(posA2[vi2 * 3], posA2[vi2 * 3 + 1], posA2[vi2 * 3 + 2]); }
+            idxA2[t2 + e2] = remap2[vi2];
+          }
+        }
+      }
+      if (extra2.length) {
+        var np2 = new Float32Array(posA2.length + extra2.length);
+        np2.set(posA2); np2.set(extra2, posA2.length);
+        g.setAttribute("position", new THREE.BufferAttribute(np2, 3));
+        g.setIndex(idxA2);
+      }
+    }
     g.computeVertexNormals();
     g.rotateX(-Math.PI / 2);
     g.computeBoundingBox();
