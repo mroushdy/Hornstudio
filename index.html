@@ -1,4 +1,3 @@
-
 <!-- HORN STUDIO — published-science horn geometry: JMLC/SWH/tractrix/hypex/conical/CD(Keele)/OS-SE/R-OSSE, PETF presets, Webster loading indicator, STL/OBJ/CSV/cloud exports -->
 <!--
   Copyright (c) 2026 Silence Please (New York).
@@ -2417,16 +2416,23 @@ function sectionPoint(shape, a, b, rho, u) {
   var arcQ = rho * Math.PI / 4;              // half-arc length
   var b1 = sv / Math.max(1e-9, sv + arcQ);   // first-half breakpoint: flat | half-arc
   var b2 = arcQ / Math.max(1e-9, arcQ + sh); // second-half breakpoint: half-arc | flat
+  /* entry 207 (Marwan: "ribs perpendicular to the line where the faces
+     meet"): the geometry measured rib-free to 0.02 mm -- the visible banding
+     was SKINNY-QUAD SHADING at the crease (uniform arc-length sampling left
+     16 mm azimuthal gaps beside the corner). The flat mapping now eases with
+     p = 1.55 toward the corner: quad width at the crease drops ~3x, spacing
+     stays bounded (no coincidence at any segs), the corner stays pinned. */
+  var pE7 = 1.55;
   if (vv < 0.5) {
     var h1 = vv * 2;
-    if (h1 < b1) { x = a; y = sv * (h1 / Math.max(1e-9, b1)); wH = 1; }
+    if (h1 < b1) { x = a; y = sv * (1 - Math.pow(1 - h1 / Math.max(1e-9, b1), pE7)); wH = 1; }
     else { t = (h1 - b1) / Math.max(1e-9, 1 - b1) * Math.PI / 4;
       x = sh + rho * Math.cos(t); y = sv + rho * Math.sin(t); wH = Math.cos(t) * Math.cos(t); }
   } else {
     var h2 = (vv - 0.5) * 2;
     if (h2 < b2) { t = Math.PI / 4 + h2 / Math.max(1e-9, b2) * Math.PI / 4;
       x = sh + rho * Math.cos(t); y = sv + rho * Math.sin(t); wH = Math.cos(t) * Math.cos(t); }
-    else { x = sh * (1 - (h2 - b2) / Math.max(1e-9, 1 - b2)); y = b; wH = 0; }
+    else { x = sh * (1 - Math.pow((h2 - b2) / Math.max(1e-9, 1 - b2), pE7)); y = b; wH = 0; }   /* p (not 1/p): f-prime(0) = 0 compresses at the corner; the inverse exponent EXPANDED the first step to 31 mm */
   }
   if (q === 1) x = -x;
   else if (q === 2) { x = -x; y = -y; }
@@ -5532,7 +5538,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
 
   /* ================= UI ================= */
   var PARAMS = [
-    { key: "fc", label: "Cut-off fc", unit: "Hz", min: 80, max: 10000, step: 5,   /* entry 149: user request "100 Hz or less" -- all prof families verified stable at 80 */ sect: "core", fams: { jmlc: 1, jmlcell: 1, iwata: 1, swh: 1, tractrix: 1, hypex: 1, conical: 1, cd: 1, biradial: 1, wn: 1 } },
+    { key: "fc", label: "Cut-off fc", unit: "Hz", min: 80, max: 10000, step: 5, log: 1,   /* entry 208: forum request (4-inch waveguide, fc past 2 kHz) -- LOG slider: full 80-10k range with usable resolution at both ends; typed values were never capped below 10k in this build */   /* entry 149: user request "100 Hz or less" -- all prof families verified stable at 80 */ sect: "core", fams: { jmlc: 1, jmlcell: 1, iwata: 1, swh: 1, tractrix: 1, hypex: 1, conical: 1, cd: 1, biradial: 1, wn: 1 } },
     { key: "throatD", label: "Throat \u00d8", unit: "mm", min: 4, max: 120, step: 0.01, sect: "core" },   // entry 89: forum request, tiny horns (3 cm tractrix, 5 mm throats)
     { key: "ribW", label: "Rect throat W", unit: "mm", min: 0, max: 320, step: 0.5, sect: "core", fams: { jmlc: 1, jmlcell: 1, swh: 1, tractrix: 1, hypex: 1, conical: 1, cd: 1, os: 1, osc: 1, rosse: 1 } },
     { key: "ribH", label: "Rect throat H", unit: "mm", min: 0, max: 320, step: 0.5, sect: "core", fams: { jmlc: 1, jmlcell: 1, swh: 1, tractrix: 1, hypex: 1, conical: 1, cd: 1, os: 1, osc: 1, rosse: 1 } },
@@ -5596,7 +5602,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       '<div class="prow"><label class="plabel" for="num_' + p.key + '">' + p.label + '</label>' +
       '<span><input class="pnum" id="num_' + p.key + '" type="number" min="' + p.min + '" max="' + p.max + '" step="' + p.step + '" value="' + S[p.key] + '">' +
       '<span class="punit">' + p.unit + '</span></span></div>' +
-      '<input type="range" id="rng_' + p.key + '" min="' + p.min + '" max="' + p.max + '" step="' + p.step + '" value="' + S[p.key] + '" aria-label="' + p.label + '"></div>';
+      '<input type="range" id="rng_' + p.key + '" min="' + (p.log ? 0 : p.min) + '" max="' + (p.log ? 1000 : p.max) + '" step="' + (p.log ? 1 : p.step) + '" value="' + (p.log ? Math.round(1000 * Math.log(S[p.key] / p.min) / Math.log(p.max / p.min)) : S[p.key]) + '" aria-label="' + p.label + '"></div>';
   }
   var lastDirEst = null;
   var buildCurrentBEM = null;   // entry 135: shared scope (assigned in build())
@@ -5763,7 +5769,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       '<main>' +
       '<div style="padding:12px 16px;border-bottom:1px solid var(--line)"><div class="eyebrow" style="margin-bottom:6px">3-D PREVIEW \u2014 DRAG ROTATE \u00b7 WHEEL ZOOM <button class="btn" id="showConstr" style="display:none;width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">SHOW CONSTRUCTION</button><button class="btn" id="dirOvBtn" style="width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">DIRECTIVITY: OFF</button><button class="btn" id="bemPrevBtn" style="width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">BEM MESH: OFF</button></div>' +
       '<div id="view3d" style="width:100%;height:380px;background:#FFFFFF;touch-action:none;cursor:grab"></div>' +
-      '<span id="buildstamp" style="font-family:var(--mono);font-size:9px;color:var(--faint);letter-spacing:0.08em">build 206 · 2026-07-18</span><div id="v3dnote" style="font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:6px;letter-spacing:.04em"></div></div>' +
+      '<span id="buildstamp" style="font-family:var(--mono);font-size:9px;color:var(--faint);letter-spacing:0.08em">build 208 · 2026-07-18</span><div id="v3dnote" style="font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:6px;letter-spacing:.04em"></div></div>' +
       '<div id="drawing" style="padding:10px 12px 0"></div>' +
       '<div class="legend" id="legend"></div><div class="stats" id="stats"></div>' +
       '<div style="padding:14px 16px 0 16px"><div class="eyebrow">REPORTS \u2014 1-D / GEOMETRIC ESTIMATES (NOT A BEM SUBSTITUTE)</div></div>' +
@@ -5784,7 +5790,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       function set(v, typing9) {
         if (!isFinite(v)) return;
         var vc = Math.max(p.min, Math.min(p.max, v));   // AUDIT #12: clamp to declared limits
-        S[p.key] = vc; rng.value = vc;
+        S[p.key] = vc; rng.value = valToRng9(vc);
         // entry 189 (user report: "typing 22 goes to 42"): clamping WROTE BACK
         // into the field on every keystroke -- the first digit "2" clamped to
         // the min ("4"), then the second keystroke appended: "42". While the
@@ -5812,7 +5818,12 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       }
       num.addEventListener("input", function () { markAndSet(parseFloat(num.value), true); });
       num.addEventListener("change", function () { markAndSet(parseFloat(num.value)); if (!isFinite(parseFloat(num.value))) num.value = S[p.key]; });   // commit: normalize the field
-      rng.addEventListener("input", function () { markAndSet(parseFloat(rng.value)); });
+      /* entry 208: LOG sliders (p.log) -- the range element holds a 0..1000
+         POSITION; value = min * (max/min)^(pos/1000). Frequency-like dials get
+         usable resolution across two decades instead of a linear crawl. */
+      function rngToVal9(pos9) { return p.log ? p.min * Math.pow(p.max / p.min, pos9 / 1000) : pos9; }
+      function valToRng9(v9) { return p.log ? 1000 * Math.log(v9 / p.min) / Math.log(p.max / p.min) : v9; }
+      rng.addEventListener("input", function () { markAndSet(p.log ? Math.round(rngToVal9(parseFloat(rng.value))) : parseFloat(rng.value)); });
     });
     // Per-family reference defaults, applied on family switch (2026-07-13; replaces a
     // conical-only entryDeg hack that STUCK at 15 when leaving conical -- jmlc's canonical
@@ -5894,7 +5905,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       PARAMS.forEach(function (p) {
         var num = document.getElementById("num_" + p.key), rng = document.getElementById("rng_" + p.key);
         if (num) num.value = S[p.key];
-        if (rng) rng.value = S[p.key];
+        if (rng) rng.value = p.log ? 1000 * Math.log(S[p.key] / p.min) / Math.log(p.max / p.min) : S[p.key];   /* entry 208: log-mapped */
       });
       scheduleUpdate();
     });
