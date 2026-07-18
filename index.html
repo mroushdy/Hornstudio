@@ -5803,7 +5803,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       function markAndSet(v9, typing9) {
         if (!S._touched) S._touched = {}; S._touched[p.key] = 1;
         set(v9, typing9);
-        // entry 149 (SA8535 user: "I was expecting the flare calculations to
+        // entry 149 (user report: "I was expecting the flare calculations to
         // use the equivalent throat diameter"): changing the ribbon dims
         // auto-matches the throat to the area-equivalent -- the LAW follows
         // the ribbon; manual throatD edits afterwards still win (and warn).
@@ -5869,7 +5869,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
         if (n0) n0.value = 0; if (r0) r0.value = 0;
       });
       applyFamilyDefaults(false);
-      syncSymEligibility();   // entry 149 (Thommy: quarter silently fell back to full for WN)
+      syncSymEligibility();   // entry 149 (user report: quarter silently fell back to full for WN)
       scheduleUpdate();
     });
     function syncSymEligibility() {
