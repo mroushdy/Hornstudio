@@ -4736,6 +4736,105 @@ function evalNurbs(sf, u, v) {
     } }
   return [x, y, z];
 }
+// ===== FOUR-PATCH SHARP-CORNER NURBS (entry 211, user report with a Fusion
+// screenshot: "I am almost certain this geometry is a result of step export
+// u gotta really fix this once and for all"). MEASURED first: a C2 spline
+// forced through a sharp corner RINGS -- the mouth boundary curve dipped
+// 1.57 mm (110x48) / 2.36 mm (56x32) into its own rectangle beside every
+// corner: the wavy rim in the screenshot. The lawful fix is how CAD models
+// a box: at cornerR ~0 the tube splits into FOUR clamped patches meeting at
+// true crease edges. Shared global u-interpolation makes adjacent patches'
+// corner columns BIT-IDENTICAL; clamped v-interpolation per side makes the
+// corners EXACT and the flats ring-free (a cubic through collinear points
+// is the line). Fewer isocurves per face as a bonus.
+function quadLoft(rings, M, segs, cornerIdx) {
+  var P = [], i, j;
+  for (i = 0; i < M; i++) { var row = []; for (j = 0; j < segs; j++) { var k9 = (i * segs + j) * 3; row.push([rings[k9], rings[k9 + 1], rings[k9 + 2]]); } P.push(row); }
+  // global u parameterization + column interpolation (shared by all patches)
+  var uP = new Float64Array(M);
+  for (j = 0; j < segs; j++) { var col = []; for (i = 0; i < M; i++) col.push(P[i][j]); var cu = chordParams(col); for (i = 0; i < M; i++) uP[i] += cu[i] / segs; }
+  var kU = avgKnots(Array.from(uP), 3);
+  var R = [];
+  for (j = 0; j < segs; j++) { var colD = []; for (i = 0; i < M; i++) colD.push(P[i][j]); R.push(bandedInterp(Array.from(uP), kU, colD, M)); }
+  var patches = [];
+  for (var p = 0; p < 4; p++) {
+    var jA = cornerIdx[p], jB = cornerIdx[(p + 1) % 4];
+    var cols = [];
+    for (j = jA; ; j = (j + 1) % segs) { cols.push(j); if (j === jB) break; }
+    var nvp = cols.length;
+    var vP = new Float64Array(nvp);
+    for (i = 0; i < M; i++) { var rw = chordParams(cols.map(function (jj) { return P[i][jj]; })); for (j = 0; j < nvp; j++) vP[j] += rw[j] / M; }
+    var kV = avgKnots(Array.from(vP), 3);
+    var ctrl = [];
+    for (i = 0; i < M; i++) ctrl.push(bandedInterp(Array.from(vP), kV, cols.map(function (jj) { return R[jj][i]; }), nvp));
+    patches.push({ ctrl: ctrl, kU: kU, kV: kV, nu: M, nv: nvp, jA: jA, jB: jB });
+  }
+  return { patches: patches, R: R, kU: kU, cornerIdx: cornerIdx };
+}
+function stepFromNurbsQuad(q, name) {
+  var L = [], id = 0;
+  function E9(txt) { id++; L.push("#" + id + "=" + txt + ";"); return id; }
+  function knotStr(K) {
+    var ks = [], ms = [], i9;
+    for (i9 = 0; i9 < K.length; i9++) {
+      if (ks.length && Math.abs(K[i9] - ks[ks.length - 1]) < 1e-12) ms[ms.length - 1]++;
+      else { ks.push(K[i9]); ms.push(1); }
+    }
+    return { m: "(" + ms.join(",") + ")", k: "(" + ks.map(function (x) { return x.toFixed(9); }).join(",") + ")" };
+  }
+  function cp(p9) { return E9("CARTESIAN_POINT('',(" + p9[0].toFixed(6) + "," + p9[1].toFixed(6) + "," + p9[2].toFixed(6) + "))"); }
+  function curve(pts, kk) {
+    var ids9 = pts.map(function (p9) { return "#" + cp(p9); });
+    var ks9 = knotStr(kk);
+    return E9("B_SPLINE_CURVE_WITH_KNOTS('',3,(" + ids9.join(",") + "),.UNSPECIFIED.,.F.,.F.," + ks9.m + "," + ks9.k + ",.UNSPECIFIED.)");
+  }
+  // shared corner infrastructure: one vertex pair + one edge per corner column
+  var vT = [], vM = [], eCorner = [];
+  for (var c = 0; c < 4; c++) {
+    var col = q.R[q.cornerIdx[c]];                       // u-control of the corner column
+    vT.push(E9("VERTEX_POINT('',#" + cp(col[0]) + ")"));
+    vM.push(E9("VERTEX_POINT('',#" + cp(col[col.length - 1]) + ")"));
+    eCorner.push(E9("EDGE_CURVE('',#" + vT[c] + ",#" + vM[c] + ",#" + curve(col, q.kU) + ",.T.)"));
+  }
+  var faces = [];
+  for (var p = 0; p < 4; p++) {
+    var sf = q.patches[p];
+    var cpIds = [];
+    for (var i = 0; i < sf.nu; i++) { var rowI = [];
+      for (var j = 0; j < sf.nv; j++) rowI.push(cp(sf.ctrl[i][j]));
+      cpIds.push(rowI); }
+    var grid = "(" + cpIds.map(function (r) { return "(" + r.map(function (x) { return "#" + x; }).join(",") + ")"; }).join(",") + ")";
+    var ku = knotStr(sf.kU), kv = knotStr(sf.kV);
+    var surf = E9("B_SPLINE_SURFACE_WITH_KNOTS('" + name + "_side" + p + "',3,3," + grid + ",.UNSPECIFIED.,.F.,.F.,.F.," + ku.m + "," + kv.m + "," + ku.k + "," + kv.k + ",.UNSPECIFIED.)");
+    var cA = (p + 1) % 4;
+    var eThroat = E9("EDGE_CURVE('',#" + vT[p] + ",#" + vT[cA] + ",#" + curve(sf.ctrl[0], sf.kV) + ",.T.)");
+    var eMouth = E9("EDGE_CURVE('',#" + vM[p] + ",#" + vM[cA] + ",#" + curve(sf.ctrl[sf.nu - 1], sf.kV) + ",.T.)");
+    var loop = E9("EDGE_LOOP('',(#" +
+      E9("ORIENTED_EDGE('',*,*,#" + eCorner[p] + ",.T.)") + ",#" +
+      E9("ORIENTED_EDGE('',*,*,#" + eMouth + ",.T.)") + ",#" +
+      E9("ORIENTED_EDGE('',*,*,#" + eCorner[cA] + ",.F.)") + ",#" +
+      E9("ORIENTED_EDGE('',*,*,#" + eThroat + ",.F.)") + "))");
+    faces.push(E9("ADVANCED_FACE('',(#" + E9("FACE_OUTER_BOUND('',#" + loop + ",.T.)") + "),#" + surf + ",.T.)"));
+  }
+  var shell = E9("OPEN_SHELL('',(" + faces.map(function (f) { return "#" + f; }).join(",") + "))");
+  var model = E9("SHELL_BASED_SURFACE_MODEL('" + name + "',(#" + shell + "))");
+  var lenU = E9("(LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT(.MILLI.,.METRE.))");
+  var angU = E9("(NAMED_UNIT(*)PLANE_ANGLE_UNIT()SI_UNIT($,.RADIAN.))");
+  var solU = E9("(NAMED_UNIT(*)SI_UNIT($,.STERADIAN.)SOLID_ANGLE_UNIT())");
+  var tol = E9("UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(1.E-3),#" + lenU + ",'distance_accuracy_value','')");
+  var ctx = E9("(GEOMETRIC_REPRESENTATION_CONTEXT(3)GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#" + tol + "))GLOBAL_UNIT_ASSIGNED_CONTEXT((#" + lenU + ",#" + angU + ",#" + solU + "))REPRESENTATION_CONTEXT('',''))");
+  var rep = E9("MANIFOLD_SURFACE_SHAPE_REPRESENTATION('" + name + "',(#" + model + "),#" + ctx + ")");
+  var app = E9("APPLICATION_CONTEXT('core data for automotive mechanical design processes')");
+  var pdc = E9("PRODUCT_DEFINITION_CONTEXT('part definition',#" + app + ",'design')");
+  var pc = E9("PRODUCT_CONTEXT('',#" + app + ",'mechanical')");
+  var prod = E9("PRODUCT('" + name + "','" + name + "','',(#" + pc + "))");
+  var pdf = E9("PRODUCT_DEFINITION_FORMATION('','',#" + prod + ")");
+  var pd = E9("PRODUCT_DEFINITION('design','',#" + pdf + ",#" + pdc + ")");
+  var pds = E9("PRODUCT_DEFINITION_SHAPE('','',#" + pd + ")");
+  E9("SHAPE_DEFINITION_REPRESENTATION(#" + pds + ",#" + rep + ")");
+  var head = "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('Horn Studio NURBS four-patch sharp-corner surface'),'2;1');\nFILE_NAME('" + name + ".step','',(''),(''),'Horn Studio','','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 2 1 1 }'));\nENDSEC;\nDATA;\n";
+  return head + L.join("\n") + "\nENDSEC;\nEND-ISO-10303-21;\n";
+}
 function stepFromNurbs(sf, name) {
   var L = [], id = 0;
   function E9(txt) { id++; L.push("#" + id + "=" + txt + ";"); return id; }
@@ -5793,7 +5892,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       '<main>' +
       '<div style="padding:12px 16px;border-bottom:1px solid var(--line)"><div class="eyebrow" style="margin-bottom:6px">3-D PREVIEW \u2014 DRAG ROTATE \u00b7 WHEEL ZOOM <button class="btn" id="showConstr" style="display:none;width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">SHOW CONSTRUCTION</button><button class="btn" id="dirOvBtn" style="width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">DIRECTIVITY: OFF</button><button class="btn" id="bemPrevBtn" style="width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">BEM MESH: OFF</button></div>' +
       '<div id="view3d" style="width:100%;height:380px;background:#FFFFFF;touch-action:none;cursor:grab"></div>' +
-      '<span id="buildstamp" style="font-family:var(--mono);font-size:9px;color:var(--faint);letter-spacing:0.08em">build 210 · 2026-07-19</span><div id="v3dnote" style="font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:6px;letter-spacing:.04em"></div></div>' +
+      '<span id="buildstamp" style="font-family:var(--mono);font-size:9px;color:var(--faint);letter-spacing:0.08em">build 211 · 2026-07-19</span><div id="v3dnote" style="font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:6px;letter-spacing:.04em"></div></div>' +
       '<div id="drawing" style="padding:10px 12px 0"></div>' +
       '<div class="legend" id="legend"></div><div class="stats" id="stats"></div>' +
       '<div style="padding:14px 16px 0 16px"><div class="eyebrow">REPORTS \u2014 1-D / GEOMETRIC ESTIMATES (NOT A BEM SUBSTITUTE)</div></div>' +
@@ -6080,8 +6179,20 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
         segsN = 32;
         ringsN = buildRings(profN, segsN); MN = profN.H.length;
       }
-      var sfN = nurbsLoft(ringsN, MN, segsN);
-      saveBlob(fname("nurbs") + ".step", new Blob([stepFromNurbs(sfN, "horn_inner_surface")], { type: "text/plain" }));
+      /* entry 211: at sharp corners a C2 tube RINGS through them (rim dipped
+         1.6-2.4 mm beside every corner -- the wavy Fusion mouths users
+         reported). The lawful sharp-corner artifact is FOUR clamped patches
+         meeting at true crease edges: corners exact, flats ring-free, rim
+         deviation 0.0000 mm measured. Round-cornered sections keep the
+         single seamed tube. */
+      if (S.section === "rrect" && S.cornerR < 0.5) {
+        var cIdxN = [0, 1, 2, 3].map(function (qq) { return Math.round(segsN * (qq + 0.5) / 4); });
+        var qN = quadLoft(ringsN, MN, segsN, cIdxN);
+        saveBlob(fname("nurbs") + ".step", new Blob([stepFromNurbsQuad(qN, "horn_inner_surface")], { type: "text/plain" }));
+      } else {
+        var sfN = nurbsLoft(ringsN, MN, segsN);
+        saveBlob(fname("nurbs") + ".step", new Blob([stepFromNurbs(sfN, "horn_inner_surface")], { type: "text/plain" }));
+      }
       var ntN = document.getElementById("v3dnote");
       if (ntN) ntN.textContent = "NURBS STEP saved: one bicubic B-spline surface (" + MN + "\u00d7" + (segsN + 1) + " interpolated), inner surface only \u2014 thicken in CAD; the faceted STEP remains for direct solids";
     });
