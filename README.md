@@ -1,6 +1,6 @@
 # Horn Studio — Provenance & Attribution
 
-*Maintained by Marwan (Silence Please, New York). Version 1.0, 16 July 2026.
+*Maintained by (Silence Please, New York). Version 1.0, 16 July 2026.
 This document is part of the repository and is updated whenever a method,
 citation, or credit changes; corrections are incorporated with acknowledgment.*
 
