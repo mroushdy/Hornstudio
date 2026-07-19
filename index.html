@@ -4747,6 +4747,41 @@ function evalNurbs(sf, u, v) {
 // corner columns BIT-IDENTICAL; clamped v-interpolation per side makes the
 // corners EXACT and the flats ring-free (a cubic through collinear points
 // is the line). Fewer isocurves per face as a bonus.
+// entry 212: ring-grid offset for the SOLID NURBS export -- the entry-206
+// mitered normal offset (true left/right dihedral, cap 1.5) applied to the
+// ring array itself, with the entry-201 machined ends: ring 0 pinned to the
+// throat plane, ring M-1 pinned to the mouth plane, so both caps are flat.
+function offsetRings(rings, M, segs, t) {
+  var out = new Float32Array(rings.length), i, j;
+  var zMouth = 0;
+  for (j = 0; j < segs; j++) zMouth = Math.max(zMouth, rings[((M - 1) * segs + j) * 3]);
+  for (i = 0; i < M; i++) {
+    var ip = Math.max(0, i - 1), iq = Math.min(M - 1, i + 1);
+    for (j = 0; j < segs; j++) {
+      var jp = (j + segs - 1) % segs, jq = (j + 1) % segs;
+      var k0 = (i * segs + j) * 3, kp = (ip * segs + j) * 3, kq = (iq * segs + j) * 3;
+      var tix = rings[kq] - rings[kp], tiy = rings[kq + 1] - rings[kp + 1], tiz = rings[kq + 2] - rings[kp + 2];
+      var kl = (i * segs + jp) * 3, kr = (i * segs + jq) * 3;
+      function cx9(ax, ay, az) {
+        var vx = ay * tiz - az * tiy, vy = az * tix - ax * tiz, vz = ax * tiy - ay * tix;
+        var vl = Math.hypot(vx, vy, vz) || 1e-12;
+        return [vx / vl, vy / vl, vz / vl];
+      }
+      var nL = cx9(rings[k0] - rings[kl], rings[k0 + 1] - rings[kl + 1], rings[k0 + 2] - rings[kl + 2]);
+      var nR = cx9(rings[kr] - rings[k0], rings[kr + 1] - rings[k0 + 1], rings[kr + 2] - rings[k0 + 2]);
+      var nx = nL[0] + nR[0], ny = nL[1] + nR[1], nz = nL[2] + nR[2];
+      var nl = Math.hypot(nx, ny, nz) || 1e-12;
+      var dot = Math.max(-1, Math.min(1, nL[0] * nR[0] + nL[1] * nR[1] + nL[2] * nR[2]));
+      var mit = Math.min(1.5, 1 / Math.max(0.667, Math.sqrt((1 + dot) / 2)));
+      out[k0] = rings[k0] + t * mit * nx / nl;
+      out[k0 + 1] = rings[k0 + 1] + t * mit * ny / nl;
+      out[k0 + 2] = rings[k0 + 2] + t * mit * nz / nl;
+      if (i === 0) out[k0] = 0;
+      if (i === M - 1) out[k0] = zMouth;
+    }
+  }
+  return out;
+}
 function quadLoft(rings, M, segs, cornerIdx) {
   var P = [], i, j;
   for (i = 0; i < M; i++) { var row = []; for (j = 0; j < segs; j++) { var k9 = (i * segs + j) * 3; row.push([rings[k9], rings[k9 + 1], rings[k9 + 2]]); } P.push(row); }
@@ -4770,6 +4805,89 @@ function quadLoft(rings, M, segs, cornerIdx) {
     patches.push({ ctrl: ctrl, kU: kU, kV: kV, nu: M, nv: nvp, jA: jA, jB: jB });
   }
   return { patches: patches, R: R, kU: kU, cornerIdx: cornerIdx };
+}
+// entry 212: the SOLID quad writer -- a finished, watertight part. Ten faces:
+// four inner patches, four outer patches (offset rings, same corner indices),
+// a flat annular throat flange and a flat mouth end face, every edge shared
+// by exactly two faces, CLOSED_SHELL -> MANIFOLD_SOLID_BREP. CAD imports a
+// body with wall thickness, real corner edges, and machinable end faces.
+function stepFromNurbsSolidQuad(qi, qo, name) {
+  var L = [], id = 0;
+  function E9(txt) { id++; L.push("#" + id + "=" + txt + ";"); return id; }
+  function knotStr(K) {
+    var ks = [], ms = [], i9;
+    for (i9 = 0; i9 < K.length; i9++) {
+      if (ks.length && Math.abs(K[i9] - ks[ks.length - 1]) < 1e-12) ms[ms.length - 1]++;
+      else { ks.push(K[i9]); ms.push(1); }
+    }
+    return { m: "(" + ms.join(",") + ")", k: "(" + ks.map(function (x) { return x.toFixed(9); }).join(",") + ")" };
+  }
+  function cp(p9) { return E9("CARTESIAN_POINT('',(" + p9[0].toFixed(6) + "," + p9[1].toFixed(6) + "," + p9[2].toFixed(6) + "))"); }
+  function curve(pts, kk) {
+    var ids9 = pts.map(function (p9) { return "#" + cp(p9); });
+    var ks9 = knotStr(kk);
+    return E9("B_SPLINE_CURVE_WITH_KNOTS('',3,(" + ids9.join(",") + "),.UNSPECIFIED.,.F.,.F.," + ks9.m + "," + ks9.k + ",.UNSPECIFIED.)");
+  }
+  function shellHalf(q, tag) {
+    // vertices + corner edges + per-side surface/arc entities for one wall
+    var vT = [], vM = [], eC = [];
+    for (var c = 0; c < 4; c++) {
+      var col = q.R[q.cornerIdx[c]];
+      vT.push(E9("VERTEX_POINT('',#" + cp(col[0]) + ")"));
+      vM.push(E9("VERTEX_POINT('',#" + cp(col[col.length - 1]) + ")"));
+      eC.push(E9("EDGE_CURVE('',#" + vT[c] + ",#" + vM[c] + ",#" + curve(col, q.kU) + ",.T.)"));
+    }
+    var faces = [], eT = [], eM = [];
+    for (var p = 0; p < 4; p++) {
+      var sf = q.patches[p], cA = (p + 1) % 4;
+      var cpIds = [];
+      for (var i = 0; i < sf.nu; i++) { var rowI = []; for (var j = 0; j < sf.nv; j++) rowI.push(cp(sf.ctrl[i][j])); cpIds.push(rowI); }
+      var grid = "(" + cpIds.map(function (r) { return "(" + r.map(function (x) { return "#" + x; }).join(",") + ")"; }).join(",") + ")";
+      var ku = knotStr(sf.kU), kv = knotStr(sf.kV);
+      var surf = E9("B_SPLINE_SURFACE_WITH_KNOTS('" + name + "_" + tag + p + "',3,3," + grid + ",.UNSPECIFIED.,.F.,.F.,.F.," + ku.m + "," + kv.m + "," + ku.k + "," + kv.k + ",.UNSPECIFIED.)");
+      eT.push(E9("EDGE_CURVE('',#" + vT[p] + ",#" + vT[cA] + ",#" + curve(sf.ctrl[0], sf.kV) + ",.T.)"));
+      eM.push(E9("EDGE_CURVE('',#" + vM[p] + ",#" + vM[cA] + ",#" + curve(sf.ctrl[sf.nu - 1], sf.kV) + ",.T.)"));
+      var loop = E9("EDGE_LOOP('',(#" +
+        E9("ORIENTED_EDGE('',*,*,#" + eC[p] + ",.T.)") + ",#" +
+        E9("ORIENTED_EDGE('',*,*,#" + eM[p] + ",.T.)") + ",#" +
+        E9("ORIENTED_EDGE('',*,*,#" + eC[cA] + ",.F.)") + ",#" +
+        E9("ORIENTED_EDGE('',*,*,#" + eT[p] + ",.F.)") + "))");
+      faces.push(E9("ADVANCED_FACE('',(#" + E9("FACE_OUTER_BOUND('',#" + loop + ",.T.)") + "),#" + surf + ",.T.)"));
+    }
+    return { faces: faces, eT: eT, eM: eM };
+  }
+  var inner = shellHalf(qi, "in"), outer = shellHalf(qo, "out");
+  // planar end caps: throat flange (z = 0) and mouth face (z = zMouth)
+  function cap(z9, arcsIn, arcsOut, flip) {
+    var org = E9("CARTESIAN_POINT('',(" + z9.toFixed(6) + ",0.,0.))");
+    var ax = E9("DIRECTION('',(1.,0.,0.))"), rf = E9("DIRECTION('',(0.,1.,0.))");
+    var pl = E9("PLANE('',#" + E9("AXIS2_PLACEMENT_3D('',#" + org + ",#" + ax + ",#" + rf + ")") + ")");
+    var loopO = E9("EDGE_LOOP('',(" + arcsOut.map(function (e) { return "#" + E9("ORIENTED_EDGE('',*,*,#" + e + "," + (flip ? ".F." : ".T.") + ")"); }).join(",") + "))");
+    var loopI = E9("EDGE_LOOP('',(" + arcsIn.map(function (e) { return "#" + E9("ORIENTED_EDGE('',*,*,#" + e + "," + (flip ? ".T." : ".F.") + ")"); }).join(",") + "))");
+    return E9("ADVANCED_FACE('',(#" + E9("FACE_OUTER_BOUND('',#" + loopO + ",.T.)") + ",#" + E9("FACE_BOUND('',#" + loopI + ",.T.)") + "),#" + pl + ",.T.)");
+  }
+  var zM9 = qi.patches[0].ctrl[qi.patches[0].ctrl.length - 1][0][0];
+  var throatCap = cap(0, inner.eT, outer.eT, false);
+  var mouthCap = cap(zM9, inner.eM, outer.eM, true);
+  var allFaces = inner.faces.concat(outer.faces, [throatCap, mouthCap]);
+  var shell = E9("CLOSED_SHELL('',(" + allFaces.map(function (f) { return "#" + f; }).join(",") + "))");
+  var brep = E9("MANIFOLD_SOLID_BREP('" + name + "',#" + shell + ")");
+  var lenU = E9("(LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT(.MILLI.,.METRE.))");
+  var angU = E9("(NAMED_UNIT(*)PLANE_ANGLE_UNIT()SI_UNIT($,.RADIAN.))");
+  var solU = E9("(NAMED_UNIT(*)SI_UNIT($,.STERADIAN.)SOLID_ANGLE_UNIT())");
+  var tol = E9("UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(1.E-3),#" + lenU + ",'distance_accuracy_value','')");
+  var ctx = E9("(GEOMETRIC_REPRESENTATION_CONTEXT(3)GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#" + tol + "))GLOBAL_UNIT_ASSIGNED_CONTEXT((#" + lenU + ",#" + angU + ",#" + solU + "))REPRESENTATION_CONTEXT('',''))");
+  var rep = E9("ADVANCED_BREP_SHAPE_REPRESENTATION('" + name + "',(#" + brep + "),#" + ctx + ")");
+  var app = E9("APPLICATION_CONTEXT('core data for automotive mechanical design processes')");
+  var pdc = E9("PRODUCT_DEFINITION_CONTEXT('part definition',#" + app + ",'design')");
+  var pc = E9("PRODUCT_CONTEXT('',#" + app + ",'mechanical')");
+  var prod = E9("PRODUCT('" + name + "','" + name + "','',(#" + pc + "))");
+  var pdf = E9("PRODUCT_DEFINITION_FORMATION('','',#" + prod + ")");
+  var pd = E9("PRODUCT_DEFINITION('design','',#" + pdf + ",#" + pdc + ")");
+  var pds = E9("PRODUCT_DEFINITION_SHAPE('','',#" + pd + ")");
+  E9("SHAPE_DEFINITION_REPRESENTATION(#" + pds + ",#" + rep + ")");
+  var head = "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('Horn Studio thickened solid, sharp-corner four-patch walls'),'2;1');\nFILE_NAME('" + name + ".step','',(''),(''),'Horn Studio','','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 2 1 1 }'));\nENDSEC;\nDATA;\n";
+  return head + L.join("\n") + "\nENDSEC;\nEND-ISO-10303-21;\n";
 }
 function stepFromNurbsQuad(q, name) {
   var L = [], id = 0;
@@ -5892,7 +6010,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       '<main>' +
       '<div style="padding:12px 16px;border-bottom:1px solid var(--line)"><div class="eyebrow" style="margin-bottom:6px">3-D PREVIEW \u2014 DRAG ROTATE \u00b7 WHEEL ZOOM <button class="btn" id="showConstr" style="display:none;width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">SHOW CONSTRUCTION</button><button class="btn" id="dirOvBtn" style="width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">DIRECTIVITY: OFF</button><button class="btn" id="bemPrevBtn" style="width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">BEM MESH: OFF</button></div>' +
       '<div id="view3d" style="width:100%;height:380px;background:#FFFFFF;touch-action:none;cursor:grab"></div>' +
-      '<span id="buildstamp" style="font-family:var(--mono);font-size:9px;color:var(--faint);letter-spacing:0.08em">build 211 · 2026-07-19</span><div id="v3dnote" style="font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:6px;letter-spacing:.04em"></div></div>' +
+      '<span id="buildstamp" style="font-family:var(--mono);font-size:9px;color:var(--faint);letter-spacing:0.08em">build 212 · 2026-07-19</span><div id="v3dnote" style="font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:6px;letter-spacing:.04em"></div></div>' +
       '<div id="drawing" style="padding:10px 12px 0"></div>' +
       '<div class="legend" id="legend"></div><div class="stats" id="stats"></div>' +
       '<div style="padding:14px 16px 0 16px"><div class="eyebrow">REPORTS \u2014 1-D / GEOMETRIC ESTIMATES (NOT A BEM SUBSTITUTE)</div></div>' +
@@ -6188,7 +6306,18 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       if (S.section === "rrect" && S.cornerR < 0.5) {
         var cIdxN = [0, 1, 2, 3].map(function (qq) { return Math.round(segsN * (qq + 0.5) / 4); });
         var qN = quadLoft(ringsN, MN, segsN, cIdxN);
-        saveBlob(fname("nurbs") + ".step", new Blob([stepFromNurbsQuad(qN, "horn_inner_surface")], { type: "text/plain" }));
+        /* entry 212 (user: "why not include the thickness and render it like a
+           nice step file"): with wall thickness set, the export is a FINISHED
+           WATERTIGHT SOLID -- four inner patches, four mitered outer patches,
+           flat throat flange, flat mouth face; every edge shared by exactly
+           two faces; MANIFOLD_SOLID_BREP. CAD opens a body, not a skin. */
+        if (S.thick > 0) {
+          var outN = offsetRings(ringsN, MN, segsN, S.thick);
+          var qoN = quadLoft(outN, MN, segsN, cIdxN);
+          saveBlob(fname("nurbs_solid") + ".step", new Blob([stepFromNurbsSolidQuad(qN, qoN, "horn_solid")], { type: "text/plain" }));
+        } else {
+          saveBlob(fname("nurbs") + ".step", new Blob([stepFromNurbsQuad(qN, "horn_inner_surface")], { type: "text/plain" }));
+        }
       } else {
         var sfN = nurbsLoft(ringsN, MN, segsN);
         saveBlob(fname("nurbs") + ".step", new Blob([stepFromNurbs(sfN, "horn_inner_surface")], { type: "text/plain" }));
