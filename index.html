@@ -5706,8 +5706,32 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     // entry 112: restore the autosaved design (silent; presets still reset)
     try {
       var as9 = JSON.parse(localStorage.getItem("hs_design_autosave") || "null");
+      window.__loadedBuild9 = as9 && as9.build;   /* entry 209: captured BEFORE the autosave timer overwrites the record with the current build */
       if (as9 && as9.hsDesign === 1 && as9.state) for (var ak9 in as9.state) if (Object.prototype.hasOwnProperty.call(S, ak9)) S[ak9] = as9.state[ak9];
     } catch (e1) {}
+    /* entry 209 (a user's session: settings saved by an OLDER build silently
+       loaded into a newer one -- exactly the stale-state class of entries
+       199c/200, at the user level). Saved state carries the build that wrote
+       it; on mismatch a small notice offers a one-tap reset instead of
+       silent inheritance. Never auto-clears: pushes are frequent and
+       people's designs are their work. */
+    setTimeout(function () { try {
+      var bm9 = document.getElementById('buildstamp');
+      var curB9 = bm9 ? (bm9.textContent.match(/build (\d+)/) || [])[1] : null;
+      if (curB9 && window.__loadedBuild9 && window.__loadedBuild9 !== curB9) {
+        var as9b = { build: window.__loadedBuild9 };
+        var nb9 = document.createElement("div");
+        nb9.style.cssText = "position:fixed;bottom:12px;left:12px;z-index:60;background:var(--panel,#fff);border:1px solid var(--ink,#222);padding:8px 12px;font:11px var(--mono,monospace);display:flex;gap:10px;align-items:center";
+        nb9.innerHTML = 'Settings from build ' + as9b.build + ' loaded into build ' + curB9 + '. <button id="nb9keep" style="font:inherit">Keep</button><button id="nb9reset" style="font:inherit">Reset to family defaults</button>';
+        document.body.appendChild(nb9);
+        document.getElementById("nb9keep").onclick = function () { nb9.remove(); };
+        document.getElementById("nb9reset").onclick = function () {
+          window.__suppressSave9 = 1;   /* the autosave timer must not resurrect the old state before the reload */
+          try { localStorage.removeItem("hs_design_autosave"); } catch (e9) {}
+          location.reload();
+        };
+      }
+    } catch (e9b) {} }, 900);   /* deferred: the buildstamp element must exist first */
     var throatSelHTML = '<select class="psel" id="throatSel" aria-label="Throat shape">' +
       [["round", "Throat: round"], ["rect", "Throat: rectangle W \u00d7 H"]].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === S.throatShape ? " selected" : "") + '>' + o[1] + "</option>"; }).join("") + '</select>';
     var lipSelHTML = '<select class="psel" id="lipSel" aria-label="Mouth lip style">' +
@@ -5769,7 +5793,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       '<main>' +
       '<div style="padding:12px 16px;border-bottom:1px solid var(--line)"><div class="eyebrow" style="margin-bottom:6px">3-D PREVIEW \u2014 DRAG ROTATE \u00b7 WHEEL ZOOM <button class="btn" id="showConstr" style="display:none;width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">SHOW CONSTRUCTION</button><button class="btn" id="dirOvBtn" style="width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">DIRECTIVITY: OFF</button><button class="btn" id="bemPrevBtn" style="width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">BEM MESH: OFF</button></div>' +
       '<div id="view3d" style="width:100%;height:380px;background:#FFFFFF;touch-action:none;cursor:grab"></div>' +
-      '<span id="buildstamp" style="font-family:var(--mono);font-size:9px;color:var(--faint);letter-spacing:0.08em">build 208 · 2026-07-18</span><div id="v3dnote" style="font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:6px;letter-spacing:.04em"></div></div>' +
+      '<span id="buildstamp" style="font-family:var(--mono);font-size:9px;color:var(--faint);letter-spacing:0.08em">build 210 · 2026-07-19</span><div id="v3dnote" style="font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:6px;letter-spacing:.04em"></div></div>' +
       '<div id="drawing" style="padding:10px 12px 0"></div>' +
       '<div class="legend" id="legend"></div><div class="stats" id="stats"></div>' +
       '<div style="padding:14px 16px 0 16px"><div class="eyebrow">REPORTS \u2014 1-D / GEOMETRIC ESTIMATES (NOT A BEM SUBSTITUTE)</div></div>' +
@@ -6044,7 +6068,16 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
         // ~110 stations straight from profOf (the global interpolation solve is
         // cubic in M; downsampling H/V by hand desyncs the parallel per-station
         // arrays -- entry 112 lesson)
-        var profN = profOf(lastAct, 110);
+        /* entry 210 (user report: the STEP "looks like it has a ton of lines"
+           -- CAD draws an isocurve per knot span, so a 110x49 interpolating
+           net arrives wearing a 107x46 cage; 5,390 control points is also a
+           heavy object to edit. The surface is smooth enough that a 56x33
+           net stays within 0.007 mm of the analytic law in the wall planes
+           (measured; corner C2 softening grows 0.81 -> 1.57 mm on a 292 mm
+           mouth -- recorded trade, still sub-fabrication). STL/BEM keep full
+           density; the NURBS export is the CAD-editing artifact. */
+        var profN = profOf(lastAct, 56);
+        segsN = 32;
         ringsN = buildRings(profN, segsN); MN = profN.H.length;
       }
       var sfN = nurbsLoft(ringsN, MN, segsN);
@@ -6382,7 +6415,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     update();
   }
   function update() {
-    try { localStorage.setItem("hs_design_autosave", JSON.stringify({ hsDesign: 1, state: S })); } catch (e0) {}
+    try { if (window.__suppressSave9) throw 0; localStorage.setItem("hs_design_autosave", JSON.stringify({ hsDesign: 1, build: (document.getElementById("buildstamp") && (document.getElementById("buildstamp").textContent.match(/build (\d+)/) || [])[1]) || null, state: S })); } catch (e0) {}
     var _vv = validateInputs();
     var _eb0 = document.getElementById("errbox");
     if (_eb0) { _eb0.style.display = "none"; _eb0.textContent = ""; }   // clear stale warnings; validators below re-show as needed
