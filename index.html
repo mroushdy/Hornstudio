@@ -6127,7 +6127,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       '<main>' +
       '<div style="padding:12px 16px;border-bottom:1px solid var(--line)"><div class="eyebrow" style="margin-bottom:6px">3-D PREVIEW \u2014 DRAG ROTATE \u00b7 WHEEL ZOOM <button class="btn" id="showConstr" style="display:none;width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">SHOW CONSTRUCTION</button><button class="btn" id="dirOvBtn" style="width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">DIRECTIVITY: OFF</button><button class="btn" id="bemPrevBtn" style="width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">BEM MESH: OFF</button></div>' +
       '<div id="view3d" style="width:100%;height:380px;background:#FFFFFF;touch-action:none;cursor:grab"></div>' +
-      '<span id="buildstamp" style="font-family:var(--mono);font-size:9px;color:var(--faint);letter-spacing:0.08em">build 215 · 2026-07-20</span><div id="v3dnote" style="font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:6px;letter-spacing:.04em"></div></div>' +
+      '<span id="buildstamp" style="font-family:var(--mono);font-size:9px;color:var(--faint);letter-spacing:0.08em">build 217 · 2026-07-20</span><div id="v3dnote" style="font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:6px;letter-spacing:.04em"></div></div>' +
       '<div id="drawing" style="padding:10px 12px 0"></div>' +
       '<div class="legend" id="legend"></div><div class="stats" id="stats"></div>' +
       '<div style="padding:14px 16px 0 16px"><div class="eyebrow">REPORTS \u2014 1-D / GEOMETRIC ESTIMATES (NOT A BEM SUBSTITUTE)</div></div>' +
@@ -6192,7 +6192,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     var FAMILY_DEFAULTS = {
       jmlc:     { entryDeg: 0, fc: 400, T0: 0.7, trunc: 175 },
       jmlcell:  { entryDeg: 0, fc: 500, T0: 0.5, trunc: 175, throatD: 50, aplat: 4, ellMu: 0.88, ellSigma: 0.53 },
-      iwata:    { fc: 640, decoupeN: 0.3, decoupeP: 11, trunc: 268 }, // entry 102: fixed-proportion -- fc 640 = the commercial-footprint half-scale (throat 12.7); fc 320 = his full sheet design (1-inch throat) // entry 99: defaults calibrated to the COMMERCIAL Iwata 300 footprint (284x186 vs real 290x185; depth 267 vs 245); his sheet's own example = fc 320 (double size) // entry 88: JMLC's own quasi-elliptical example (mai 2007); Gaussian ramp = his WE parameterization
+      iwata:    { fc: 640, decoupeN: 0.3, decoupeP: 11, trunc: 268, iwExitD: 50.8 }, // entry 217 (forum: "the intake seems small for a 2inch driver" + user intent): fresh Iwata boots SAWN at the 2-inch driver exit -- the Iwata-300 lineage is a 2" horn; 0 = full generative neck stays one dial away // entry 102: fixed-proportion -- fc 640 = the commercial-footprint half-scale (throat 12.7); fc 320 = his full sheet design (1-inch throat) // entry 99: defaults calibrated to the COMMERCIAL Iwata 300 footprint (284x186 vs real 290x185; depth 267 vs 245); his sheet's own example = fc 320 (double size) // entry 88: JMLC's own quasi-elliptical example (mai 2007); Gaussian ramp = his WE parameterization
       swh:      { fc: 400, T0: 0.7, trunc: 175 },
       tractrix: { fc: 400, trunc: 88 },   // its own UI cap is 89 (audit #12: default exceeded the cap)
       hypex:    { fc: 400, T0: 0.7 },
@@ -6849,6 +6849,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     /* per-family method blurb (dynamic, 2026-07-13 -- was a static all-methods wall) */
     function methodBlurb() {
       var F = {
+        iwata: 'Iwata (JMLC 2007, decoded from his calcul_3D sheets): a FIXED-PROPORTION design \u2014 the whole geometry follows fc, so the throat is not a free dial. The drawn entry is a long, slowly-expanding generative neck that the real horns saw off at the driver exit: set \u201cDriver exit \u00d8 cut\u201d to your driver (50.8 = 2\u2033, the Iwata-300 lineage; 35.56 = 1.4\u2033; 0 = full neck). The cut snaps to a decoded grid row and the stats report the true elliptical rim \u2014 the Iwata expands H-first, so a \u00d852 area-equivalent cut is a 67.7\u00d733.3 mm rim, not a circle.',
         jmlc: 'JMLC isophase (Le Cl\u00e9ac\u2019h method): the mouth roundover IS the construction \u2014 WRAP extends the native roll past the truncation (no invented arc; R hidden as N/A). Polyline wavefront advanced along wall normals; the outer element solves the hyp-ex area law S(s) = S\u2080\u00b7(cosh(m/2\u00b7s) + T(s)\u00b7sinh(m/2\u00b7s))\u00b2, m = 4\u03c0fc/c, outer element \u27c2 wall. Entry angle > 0 seeds a driver-matched conical mid element; 0 is canonical (the opening angle is intrinsic to fc/T).',
         swh: 'Kugelwellen / SWH (Klangfilm\u2013R\u00f6sch): spherical-cap wavefronts of constant radius r\u2080 = c/(\u03c0\u00b7fc); h = h\u2080\u00b7g\u00b2, y\u00b2 = h(2r\u2080\u2212h); mouth at the vertical tangent h = 1/m. Aspect > 1 switches to ellipsoidal wavefronts (triaxial stretch, exact cap-area law); the SP toggle applies the stereographic-projection point map (saddle mouth, minor axis forward).',
         tractrix: 'Tractrix (Neile 1657 curve): constant tangent length r\u2080 = c/(2\u03c0\u00b7fc) to the axis; closed-form x(y) marched from the throat toward the asymptotic mouth radius r\u2080.',
@@ -6877,7 +6878,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     var i;   // entry 96: the extracted chart block took update()'s declaration with it
     var Lz = 0; for (i = 0; i < actProf.H.length; i++) Lz = Math.max(Lz, actProf.H[i].z, actProf.V[i].z);
     var st = statHTML("Length", fmt(Lz) + " mm");
-    if (S.family === "iwata" && lastAct.iwThroatR) st += statHTML(lastAct.iwCutD > 0 ? "Driver exit cut" : "Throat \u00d8 (fixed by geometry)", lastAct.iwCutD > 0 ? ("\u00d8 " + fmt(lastAct.iwCutD, 1) + " mm area-equiv \u00b7 rim " + fmt(2 * lastAct.wall[0].r, 1) + "\u00d7" + fmt(2 * lastAct.wallV[0].r, 1) + " mm (H\u00d7V) \u00b7 neck removed " + fmt(lastAct.iwCutZ, 0) + " mm") : (fmt(lastAct.iwThroatR * 2, 1) + " mm \u00b7 1\u2033 at fc 320"));
+    if (S.family === "iwata" && lastAct.iwThroatR) st += statHTML(lastAct.iwCutD > 0 ? "Driver exit cut" : "Throat \u00d8 (fixed by geometry)", lastAct.iwCutD > 0 ? ("\u00d8 " + fmt(lastAct.iwCutD, 1) + " mm area-equiv \u00b7 rim " + fmt(2 * lastAct.wall[0].r, 1) + "\u00d7" + fmt(2 * lastAct.wallV[0].r, 1) + " mm (H\u00d7V) \u00b7 neck removed " + fmt(lastAct.iwCutZ, 0) + " mm") : (fmt(lastAct.iwThroatR * 2, 1) + " mm \u00b7 1\u2033 at fc 320 \u00b7 saw the neck at your driver: Driver exit \u00d8 cut"));   /* entry 217: the uncut state names the control (forum: "why cant we modify the throat diameter") */
     st += isRound() ? statHTML("Mouth \u00d8", fmt(lastH.r * 2) + " mm")
                     : statHTML("Mouth W \u00d7 H", fmt(lastH.r * 2) + " \u00d7 " + fmt(lastV.r * 2) + " mm");
     st += statHTML("Depth (max z)", fmt(lastAct.axialDepth !== undefined ? lastAct.axialDepth : lastAct.sEnd) + " mm");
