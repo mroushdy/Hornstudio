@@ -416,6 +416,12 @@ function cdWall(P) {
   // at the same L (clamped: if its wedge alone overreaches, it simply runs to the mouth --
   // width overshoot, i.e. better pattern control, as on the shipped EV horns).  L is extended
   // if needed so the mouth area also satisfies the kr mouth criterion.
+  // entry 213 (fuzz blind spot): cd is a LAW family -- the vertical runs the
+  // hyp-exp radius law, so an undefined T0 turns L into NaN and the emit loop
+  // (i <= NaN never true) into an EMPTY wall: no NaN for the entry-136 gates
+  // to catch, nothing downstream to measure. Guard the input up front.
+  if (!isFinite(P.T0))
+    throw new Error("cd: non-finite T0 -- the CD vertical runs the hyp-exp law; check the parameters");
   var m = 4 * Math.PI * P.fc / C, rt = P.rt;
   var Tf = makeTfun(P, m);
   var S0 = Math.PI * rt * rt;
@@ -3992,6 +3998,11 @@ function buildBEMProject(horn, prof, ringsOv, opts) {
         throw new Error("BEM export aborted: non-finite ring geometry -- check the parameters (this family may need different settings)");
     }
   }
+  // entry 213: an EMPTY profile passes the non-finite loop below trivially
+  // (zero iterations) -- the one shape the entry-136 gates could not see.
+  // A family that reaches export with zero stations is broken upstream.
+  if (prof && prof.H && !prof.H.length)
+    throw new Error("BEM export aborted: empty profile (zero stations) -- check the parameters (this family may need different settings)");
   if (prof && prof.H) for (var gG = 0; gG < prof.H.length; gG++) {
     var gH = prof.H[gG], gV = prof.V[gG];
     var gz = gH.z !== undefined ? gH.z : gH[0], gr = gH.r !== undefined ? gH.r : gH[1];
@@ -6010,7 +6021,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       '<main>' +
       '<div style="padding:12px 16px;border-bottom:1px solid var(--line)"><div class="eyebrow" style="margin-bottom:6px">3-D PREVIEW \u2014 DRAG ROTATE \u00b7 WHEEL ZOOM <button class="btn" id="showConstr" style="display:none;width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">SHOW CONSTRUCTION</button><button class="btn" id="dirOvBtn" style="width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">DIRECTIVITY: OFF</button><button class="btn" id="bemPrevBtn" style="width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">BEM MESH: OFF</button></div>' +
       '<div id="view3d" style="width:100%;height:380px;background:#FFFFFF;touch-action:none;cursor:grab"></div>' +
-      '<span id="buildstamp" style="font-family:var(--mono);font-size:9px;color:var(--faint);letter-spacing:0.08em">build 212 · 2026-07-19</span><div id="v3dnote" style="font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:6px;letter-spacing:.04em"></div></div>' +
+      '<span id="buildstamp" style="font-family:var(--mono);font-size:9px;color:var(--faint);letter-spacing:0.08em">build 213 · 2026-07-20</span><div id="v3dnote" style="font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:6px;letter-spacing:.04em"></div></div>' +
       '<div id="drawing" style="padding:10px 12px 0"></div>' +
       '<div class="legend" id="legend"></div><div class="stats" id="stats"></div>' +
       '<div style="padding:14px 16px 0 16px"><div class="eyebrow">REPORTS \u2014 1-D / GEOMETRIC ESTIMATES (NOT A BEM SUBSTITUTE)</div></div>' +
