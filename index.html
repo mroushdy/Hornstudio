@@ -3650,6 +3650,67 @@ function hornResponse(prof, fArr, coordMode, sMap) {
   for (i = 0; i < out.length; i++) out[i].db = 20 * Math.log10(Math.max(1e-12, out[i].mag / ref));
   return out;
 }
+function hornMaxSPL(prof, fArr, coordMode, sMap, opts) {
+  // AIR-NONLINEARITY MAX-SPL ESTIMATE (entry 215). Method: Makarski 2006 Ch.7
+  // (harmonic source terms from the LINEAR solution, slice by slice) reduced to
+  // closed form under 1-D area-law transfer weights; the per-slice plane-wave
+  // second-harmonic law is Thuras/Jenkins/O'Neil 1935 (rms form):
+  //   dp2 = (g+1)/(2*sqrt2*rho*c^2) * p1(z)^2 * k * dz,  k = fundamental's k.
+  // With p1(z) = pt*sqrt(St/S(z)) (resistive transport above fc) and the slice->
+  // mouth weight sqrt(S(z)/Sm), the in-horn sum collapses to
+  //   K2_horn = coef * k * pt * sqrt(St) * INT dz/sqrt(S(z)),
+  // BENCHED vs the Thuras exponential closed form at 0.008% (MAKARSKI_NOTES.md).
+  // Outside the mouth, spherical spreading adds coef*k*p1m*ln(d/rm) (the classic
+  // slowly-growing tail, evaluated at d = 4 m -- Makarski's convention).
+  // Anchor: p@1m per Pa of throat drive G = sqrt(St*Q/4pi)/1m from radiated
+  // power W = pt^2*St/(rho*c) and the app's GEOMETRIC Q(f) (Keele reversed).
+  // Same station/area/coordinate accounting as hornResponse (one geometry
+  // source); the integral stops at the AREA MAX (rolled mouths descend) and
+  // starts at z >= 0 (entry-192 loading-only driver-bore prepends are the
+  // DRIVER's interior -- this estimate is the HORN's physical limit).
+  // HONEST LIMITS: ideal driver (a good 1.4" driver costs ~3 dB at HF); no
+  // directivity-at-2f interaction (BEM arbitrates); invalid below fc where the
+  // transport is reactive (chart grays it).
+  opts = opts || {};
+  var GAM = 1.402, RHO9 = 1.205, C9 = C / 1000;            // SI locals (c from the engine constant)
+  var d9 = opts.d || 4;
+  var H = prof.H, M = H.length, i;
+  var shp = prof.shape || "ellipse", rho2 = prof.rho || 0, rA = prof.rhoArr, sA = prof.seNArr;
+  var Ssta = [], zRaw = [];
+  for (i = 0; i < M; i++) {
+    Ssta.push(1e-6 * sectionArea(sA ? "sellipse:" + sA[Math.min(i, sA.length - 1)] : shp, H[i].r, prof.V[i].r, rA ? rA[Math.min(i, rA.length - 1)] : rho2));
+    zRaw.push(H[i].z);
+  }
+  function sOfZ(zq) {
+    if (!sMap || !sMap.length) return zq;
+    if (zq <= sMap[0].z) return sMap[0].s;
+    for (var q9 = 1; q9 < sMap.length; q9++) if (sMap[q9].z >= zq) {
+      var f9 = (zq - sMap[q9 - 1].z) / (sMap[q9].z - sMap[q9 - 1].z || 1e-12);
+      return sMap[q9 - 1].s + f9 * (sMap[q9].s - sMap[q9 - 1].s);
+    }
+    return sMap[sMap.length - 1].s;
+  }
+  var i0 = 0; while (i0 < M - 1 && zRaw[i0] < 0) i0++;      // skip loading-only prepends
+  var iMax = i0; for (i = i0 + 1; i < M; i++) if (Ssta[i] > Ssta[iMax]) iMax = i;
+  var I9 = 0;
+  for (i = i0 + 1; i <= iMax; i++) {
+    var dz9 = coordMode === "wavefront" ? (sOfZ(zRaw[i]) - sOfZ(zRaw[i - 1])) : (zRaw[i] - zRaw[i - 1]);
+    I9 += Math.max(0, dz9) * 1e-3 * 0.5 * (1 / Math.sqrt(Ssta[i - 1]) + 1 / Math.sqrt(Ssta[i]));
+  }
+  var St9 = Ssta[i0], rm9 = Math.sqrt(Ssta[iMax] / Math.PI);
+  var coef = (GAM + 1) / (2 * Math.SQRT2 * RHO9 * C9 * C9);
+  var out = [];
+  for (var fi = 0; fi < fArr.length; fi++) {
+    var f = fArr[fi], k9 = 2 * Math.PI * f / C9;
+    var Q9 = opts.qArr ? opts.qArr[fi] : (opts.Q || 1);
+    var G9 = Math.sqrt(St9 * Q9 / (4 * Math.PI));           // p@1m per Pa throat (1 m implied)
+    var xh = coef * k9 * Math.sqrt(St9) * I9;               // in-horn K2 per Pa throat
+    var x9 = xh + coef * k9 * G9 * Math.log(Math.max(1.02, d9 / rm9));
+    out.push({ f: f, xh: xh, x: x9, gain: G9,
+               maxSPL10: 20 * Math.log10(Math.max(1e-12, G9 * 0.10 / x9) / 2e-5) });
+  }
+  return out;                                                // K2=3% is -10.46 dB, 1% is -20 dB from maxSPL10 (linear in K)
+}
 // entry 132 (user report: "lets make the best meshing tool that can work with both
 // Akabak and boundary lab"): GRADED WALL ASSEMBLY. Every station gets its own
 // azimuthal count tracking its local perimeter (full-circle convention, %4,
@@ -5671,6 +5732,42 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     svg += '<text x="' + pad + '" y="10" font-size="9" fill="var(--ink)" font-family="var(--mono)" letter-spacing=".04em">RADIATED POWER RESPONSE \u2014 dB rel. passband \u00b7 1-D + PISTON MOUTH (NOT BEM)</text>';
     return '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;max-width:' + W + 'px">' + svg + '</svg>';
   }
+  function maxSplChartSVG(R, col) {
+    // entry 215: air-nonlinearity Max-SPL (Thuras 1935 law, Makarski 2006 method,
+    // 1-D area-law weights). Three thresholds; K2 is linear in drive, so 3% and
+    // 1% are exact -10.46 / -20 dB offsets from the 10% curve. Below fc the
+    // area-law transport is reactive -- drawn faint-dotted as INVALID, not data.
+    var W = 350, H = 150, pad = 32;
+    var f0c = chartFWin ? chartFWin.f0 : 100, f1c = chartFWin ? chartFWin.f1 : 20000;
+    var fMin = Math.log10(f0c), fMax = Math.log10(f1c);
+    var yMin = 95, yMax = 150;
+    function X(f) { return pad + (W - pad - 10) * (Math.log10(f) - fMin) / (fMax - fMin); }
+    function Y(v) { return 14 + (H - 40) * (yMax - Math.max(yMin, Math.min(yMax, v))) / (yMax - yMin); }
+    var svg = '<line x1="' + pad + '" y1="' + (H - 26) + '" x2="' + (W - 10) + '" y2="' + (H - 26) + '" stroke="var(--line)" stroke-width="0.8"/>' +
+      '<line x1="' + pad + '" y1="14" x2="' + pad + '" y2="' + (H - 26) + '" stroke="var(--line)" stroke-width="0.8"/>';
+    svg += logGridSVG(X, f0c, f1c, 14, H - 26);
+    [100, 110, 120, 130, 140].forEach(function (g9) {
+      svg += '<line x1="' + pad + '" y1="' + esc(Y(g9)) + '" x2="' + (W - 10) + '" y2="' + esc(Y(g9)) + '" stroke="var(--' + (g9 === 120 ? 'gridmaj' : 'grid') + ')" stroke-width="0.7"/>' +
+        '<text x="' + (pad - 4) + '" y="' + esc(Y(g9) + 3) + '" text-anchor="end" font-size="8" fill="var(--faint)" font-family="var(--mono)">' + g9 + '</text>';
+    });
+    svg += '<line x1="' + esc(X(S.fc)) + '" y1="14" x2="' + esc(X(S.fc)) + '" y2="' + (H - 26) + '" stroke="var(--petf)" stroke-width="0.6" stroke-dasharray="3 3"/>';
+    fTicks(f0c, f1c).forEach(function (f9) {
+      svg += '<text x="' + esc(X(f9)) + '" y="' + (H - 14) + '" text-anchor="middle" font-size="8" fill="var(--faint)" font-family="var(--mono)">' + (f9 >= 1000 ? (f9 / 1000) + "k" : f9) + '</text>';
+    });
+    [{ off: 0, lab: "10%", w: 1.6, dash: "" }, { off: -10.46, lab: "3%", w: 1.1, dash: "5 3" }, { off: -20, lab: "1%", w: 0.9, dash: "2 3" }].forEach(function (th9) {
+      var dV = "", dI = "", lastVis = null, i9;
+      for (i9 = 0; i9 < R.length; i9++) {
+        var p9 = esc(X(R[i9].f)) + "," + esc(Y(R[i9].maxSPL10 + th9.off)) + " ";
+        if (R[i9].f >= S.fc) { dV += (dV === "" ? "M" : "L") + p9; lastVis = R[i9]; }
+        else dI += (dI === "" ? "M" : "L") + p9;
+      }
+      if (dI) svg += '<path d="' + dI + '" fill="none" stroke="var(--faint)" stroke-width="0.7" stroke-dasharray="1 3" opacity="0.6"/>';
+      if (dV) svg += '<path d="' + dV + '" fill="none" stroke="' + (th9.off === 0 ? col : "var(--faint)") + '" stroke-width="' + th9.w + '"' + (th9.dash ? ' stroke-dasharray="' + th9.dash + '"' : '') + '/>';
+      if (lastVis) svg += '<text x="' + esc(Math.min(W - 12, X(lastVis.f) + 2)) + '" y="' + esc(Y(lastVis.maxSPL10 + th9.off) - 2) + '" font-size="8" fill="var(--faint)" font-family="var(--mono)">' + th9.lab + '</text>';
+    });
+    svg += '<text x="' + pad + '" y="10" font-size="9" font-family="var(--mono)" fill="var(--faint)">MAX SPL @ 1 m · AIR K2 10/3/1% · IDEAL DRIVER — dBSPL (NOT BEM)</text>';
+    return '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;max-width:' + W + 'px">' + svg + '</svg>';
+  }
   function zChartSVG(Z, col) {
     var W = 350, H = 150, pad = 32;
     var f0c = chartFWin ? chartFWin.f0 : 100, f1c = chartFWin ? chartFWin.f1 : 20000;
@@ -5842,6 +5939,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     var petfActive = S.petf && PETF_FAMILIES[S.family];
     var col = petfActive ? "var(--petf)" : "var(--ink)";
     var actProf = lastProf;
+    var mxProf = null, mxMode = "axial", mxMap = null;   // entry 215: Max-SPL uses the SAME prof + coordinate as the Webster charts (one geometry source)
     document.getElementById("tchart").innerHTML = tChartSVG(lastAct, petfActive ? "var(--petf)" : "var(--base)");
     var fArr = [], nf = 90;
     var fW0 = chartFWin ? chartFWin.f0 : 100, fW1 = chartFWin ? chartFWin.f1 : 20000;
@@ -5850,7 +5948,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     if (_hvOn) {
       document.getElementById("zchart").innerHTML = '<div style="font-family:var(--mono);font-size:10px;color:var(--faint);padding:14px;line-height:1.6;border:1px solid var(--line)">1-D WEBSTER LOADING ESTIMATE \u2014 DISABLED<br>The per-azimuth HVDiff loft has no justified 1-D propagation coordinate; a planar H/V approximation would not represent the exported 3-D geometry.</div>';
       var _sp0 = document.getElementById("spchart"); if (_sp0) _sp0.innerHTML = "";
-      ["gdchart", "frchart"].forEach(function (cid9) { var _c9 = document.getElementById(cid9); if (_c9) _c9.innerHTML = ""; });
+      ["gdchart", "frchart", "mxchart"].forEach(function (cid9) { var _c9 = document.getElementById(cid9); if (_c9) _c9.innerHTML = ""; });
     } else if (S.family === "biradial" && lastAct && lastAct.fan) {
       // per-cell law coordinate: S(x) = 5 cells of the book rule along the center-cell radius
       var _F5 = lastAct.fan, _NN = 220, _eH = [], _eV = [];
@@ -5865,6 +5963,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       var _sp1 = document.getElementById("spchart"); if (_sp1) _sp1.innerHTML = splChartSVG(hornResponse({ H: _eH, V: _eV, shape: "ellipse", rho: 0 }, fArr, "axial"), col);
       var _gd1 = document.getElementById("gdchart"); if (_gd1) _gd1.innerHTML = gdChartSVG(hornResponse({ H: _eH, V: _eV, shape: "ellipse", rho: 0 }, fArr, "axial"), col);
       var _fr1 = document.getElementById("frchart"); if (_fr1) _fr1.innerHTML = frChartSVG({ H: _eH, V: _eV, shape: "ellipse", rho: 0 }, col);
+      mxProf = { H: _eH, V: _eV, shape: "ellipse", rho: 0 };
     } else if (S.family === "jmlc" && lastAct && lastAct.Ttrace && lastAct.Ttrace.length === lastAct.wall.length) {
       var _sm = lastAct.wall.map(function (w9, i9) { return { z: w9.z, s: lastAct.Ttrace[i9].s }; });
       lastAct.websterCoordinateLength = _sm[_sm.length - 1].s;
@@ -5872,6 +5971,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       var _sp2 = document.getElementById("spchart"); if (_sp2) _sp2.innerHTML = splChartSVG(hornResponse(actProf.spApplied ? profOf(lastAct, 300) : actProf, fArr, "wavefront", _sm), col);
       var _gd2 = document.getElementById("gdchart"); if (_gd2) _gd2.innerHTML = gdChartSVG(hornResponse(actProf.spApplied ? profOf(lastAct, 300) : actProf, fArr, "wavefront", _sm), col);
       var _fr2 = document.getElementById("frchart"); if (_fr2) _fr2.innerHTML = frChartSVG(actProf.spApplied ? profOf(lastAct, 300) : actProf, col);
+      mxProf = actProf.spApplied ? profOf(lastAct, 300) : actProf; mxMode = "wavefront"; mxMap = _sm;
     } else {
       if (lastAct) lastAct.websterCoordinateLength = lastAct.axialDepth || null;
       var chartProf3 = actProf.spApplied ? profOf(lastAct, 300) : actProf;
@@ -5899,6 +5999,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       var _sp3 = document.getElementById("spchart"); if (_sp3) _sp3.innerHTML = splChartSVG(hornResponse(chartProf3, fArr, "axial"), col);
       var _gd3 = document.getElementById("gdchart"); if (_gd3) _gd3.innerHTML = gdChartSVG(hornResponse(chartProf3, fArr, "axial"), col);
       var _fr3 = document.getElementById("frchart"); if (_fr3) _fr3.innerHTML = frChartSVG(chartProf3, col);
+      mxProf = chartProf3;   // entry 215: z<0 loading-only bore prepend is skipped inside hornMaxSPL (the estimate is the HORN's limit)
     }
     // REPORTS: beamwidth + DI geometric estimates (Keele mouth-size relation reversed)
     (function () {
@@ -5917,6 +6018,11 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       lastDirEst = _est;   // entry 126: shared with the 3-D coverage overlay
       _bw.innerHTML = bwChartSVG(_est);
       _di.innerHTML = diChartSVG(_est);
+      // entry 215: MAX SPL (air K2) -- fed by the same Q(f) as the DI chart and the
+      // same prof/coordinate as the Webster charts. Null mxProf (HVDiff) = no chart.
+      var _mx = document.getElementById("mxchart");
+      if (_mx) _mx.innerHTML = mxProf ? maxSplChartSVG(hornMaxSPL(mxProf, fArr, mxMode, mxMap,
+        { qArr: _est.bwH.map(function (tH9, qi9) { return 32400 / (tH9 * _est.bwV[qi9]); }) }), col) : "";
     })();
   }
 
@@ -6021,7 +6127,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       '<main>' +
       '<div style="padding:12px 16px;border-bottom:1px solid var(--line)"><div class="eyebrow" style="margin-bottom:6px">3-D PREVIEW \u2014 DRAG ROTATE \u00b7 WHEEL ZOOM <button class="btn" id="showConstr" style="display:none;width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">SHOW CONSTRUCTION</button><button class="btn" id="dirOvBtn" style="width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">DIRECTIVITY: OFF</button><button class="btn" id="bemPrevBtn" style="width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">BEM MESH: OFF</button></div>' +
       '<div id="view3d" style="width:100%;height:380px;background:#FFFFFF;touch-action:none;cursor:grab"></div>' +
-      '<span id="buildstamp" style="font-family:var(--mono);font-size:9px;color:var(--faint);letter-spacing:0.08em">build 214 · 2026-07-20</span><div id="v3dnote" style="font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:6px;letter-spacing:.04em"></div></div>' +
+      '<span id="buildstamp" style="font-family:var(--mono);font-size:9px;color:var(--faint);letter-spacing:0.08em">build 215 · 2026-07-20</span><div id="v3dnote" style="font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:6px;letter-spacing:.04em"></div></div>' +
       '<div id="drawing" style="padding:10px 12px 0"></div>' +
       '<div class="legend" id="legend"></div><div class="stats" id="stats"></div>' +
       '<div style="padding:14px 16px 0 16px"><div class="eyebrow">REPORTS \u2014 1-D / GEOMETRIC ESTIMATES (NOT A BEM SUBSTITUTE)</div></div>' +
@@ -6031,6 +6137,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       '<div style="flex:1 1 300px;max-width:400px" id="frchart"></div>' +
       '<div style="flex:1 1 300px;max-width:400px" id="bwchart"></div>' +
       '<div style="flex:1 1 300px;max-width:400px" id="dichart"></div>' +
+      '<div style="flex:1 1 300px;max-width:400px" id="mxchart"></div>' +
       '<div class="eqs" id="eqs"></div></div>' +
       '</main></div>' +
       '<footer><span>CLEAN-ROOM: SALMON 1946 \u00b7 LE CL\u00c9AC\u2019H \u00b7 KLANGFILM SWH \u00b7 TRACTRIX \u00b7 NEILE 1657 \u00b7 PETF \u00b7 KEELE 1975 \u00b7 KOLBREK \u00b7 BAT\u00cdK</span>' +
@@ -6469,7 +6576,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     // entry 96: SEMANTIC zoom on the frequency charts -- the axes frame stays put,
     // the FREQUENCY WINDOW changes (log-domain, cursor-anchored), ticks re-grid and
     // the sweep recomputes inside the window. Drag pans the window; dblclick resets.
-    ["zchart", "spchart", "bwchart", "dichart"].forEach(function (cid9) {
+    ["zchart", "spchart", "bwchart", "dichart", "mxchart"].forEach(function (cid9) {
       var cw = document.getElementById(cid9);
       if (!cw || !cw.addEventListener) return;
       var wOnC = (typeof window.addEventListener === "function") ? window.addEventListener.bind(window) : function () {};
@@ -6759,6 +6866,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
         t += '<br>Section morphs round throat \u2192 superellipse / WN rounded-rectangle / ellipse; Lam\u00e9 exponent blends 2 \u2192 seN along the run; corner radius sweeps throat R \u2192 mouth corner R; station area preserved exactly. Per-plane tangent end flares \u00e0 la WN termination.';
       if (S.petf) t += '<br>PETF: T(s) = T\u2080 + T_add\u00b7(1\u2212e^(\u2212m\u00b7f_mult\u00b7(s\u2212ref))); differing V-plane params = per-azimuth HVDiff loft (BEM recipes No.1 waisted / No.2 oval). Costs ~1 octave of loading for the directivity gained.';
       t += '<br>1-D Webster loading estimate: staircase chain into a baffled-piston mouth load. It does NOT predict 3-D directivity, transverse modes, diffraction, fin interaction, or non-planar wavefront behavior \u2014 BEM (AKABAK) is the arbiter. Coordinate: axial z for plane-wave analytic profiles; the true wavefront coordinate for JMLC; the per-cell law radius for the Yuichi family; axial z labeled as an APPROXIMATION for reconstructed non-axisymmetric horns.';
+      t += '<br>Max SPL (air K2): the horn\u2019s physical limit from finite-amplitude propagation in air \u2014 the plane-wave second-harmonic law (Thuras/Jenkins/O\u2019Neil 1935) integrated over the station areas with 1-D transfer weights (method after Makarski 2006, who verified the BEM-grade version within 3\u20134 dB of measurement; second harmonic dominates air distortion). Assumes an IDEAL driver (a quality 1.4\u2033 driver costs \u2248 3 dB at HF), Q from the geometric beamwidth estimate, distortion accumulated to 4 m and referred to 1 m; valid above fc where horn transport is resistive. Small geometry changes can shift this curve 1\u20133 dB \u2014 compare candidate designs with it, then let BEM arbitrate.';
       t += (S.family === 'biradial')
         ? ' Exports: STL/OBJ carry the true arc-mouth fan loft (open surface when Shell: none); CSV H/V profiles are planar (wing region approximated).'
         : ' Exports: STL/OBJ are meshes; for parametric CAD, loft the H/V CSV profiles.';
