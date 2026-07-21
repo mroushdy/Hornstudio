@@ -355,6 +355,7 @@ function osseWall(P) {
   // solve: throat radius grows by the straight run (r0' = r0 + Le*tan(a0)),
   // the curve solves from r0', and the straight segment prepends at exactly
   // tan(a0) -- C1 by construction, no blend, overshoot impossible.
+  // [restored 2026-07-21 after the entry-220 snapshot rollback]
   var Le = Math.max(0, P.osEntryLen || 0), rtFlange = r0;
   if (Le > 0) r0 = r0 + Le * ta0;
   var dKeele = 2.54e7 / (Math.max(30, covH) * f0);
@@ -726,6 +727,13 @@ function araiOptWall(P) {
     if (z >= L) { terminated = "mouth-kr1"; break; }   // per-cell kr arc (book R~402)
     aPrev = a; bPrev = b;
   }
+  // entry 220 (Marwan: raising fc "gets messed up"): when the kr=1 mouth is
+  // already satisfied at the adapter's end, pass 1 breaks immediately, the fan
+  // freezes near zero length and the rim machinery inflates a degenerate mouth
+  // (measured 1.7 m "radius" at fc 10k). The construction needs the fan to at
+  // least span its own array offset -- below Rarr the sectoral architecture
+  // does not exist. Flagged, never silently exported (exportGate).
+  if (L - zTr < Rarr) terminated = "fan-degenerate";
   return { wall: wallH, wallV: wallV, rhoTrk: rhoTrk, sEnd: s, terminated: terminated, Ttrace: Ttrace, S0: S0, m: m,
            fan: { z0: zTr - Rarr, Rarr: Rarr, Rm: Rarr + (L - zTr), covHrad: covH * Math.PI / 180, zTr: zTr, rt: rt,
                   hHalf: hHalf5, law: law5 },
@@ -1714,6 +1722,7 @@ function rosseWall(P) {
   // tangent is s0 = tan(a0)*sqrt(rr^2+m^2)/m (measured 0.1506 vs 0.1406 raw
   // tan on the ST260 defaults BEFORE this was accounted for). The straight
   // run and the enlarged throat both use s0 -- the junction is C1 exactly.
+  // [restored 2026-07-21 after the entry-220 snapshot rollback]
   var s0e = Math.tan(a0) * Math.sqrt(rr * rr + mm * mm) / Math.max(1e-6, mm);
   var Le = Math.max(0, P.osEntryLen || 0), rtFlange = r0;
   if (Le > 0) r0 = r0 + Le * s0e;
@@ -5280,6 +5289,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     fins: "off", shell: "uniform", finT: 10, adaptL: 25, wnUL: 0.5, wnUC: 0.68, showConstr: false, wnFins: 0, wnFinT: 1.0, wnClear: 0.4, wnFinU1: 0.7,
     aspect: 1.0, section: "ellipse", cornerR: 60, covH: 90, covV: 40, f0: 800, osK: 1.0, osS: 0.7, osN: 4, seN: 2.5, spProj: "flat", f0V: 0, TaddV: 0.4, fmultV: 2, rosR: 130, rosA: 39, rosA0: 7.5, rosK: 1.8, rosRr: 0.3, rosB: 0.3, rosM: 0.8, rosQ: 3.7, flareR: 20, flareWrap: 0, thick: 5
   };
+  var INIT_DEFAULTS = JSON.parse(JSON.stringify(S));   /* entry 220: snapshot of the pristine baseline BEFORE the autosave restore merges into S -- the FAMILY DEFAULTS full reset restores from here */
   var FAMILY_NAMES = { jmlc: "JMLC isophase", jmlcell: "JMLC quasi-elliptical (2007)", iwata: "Iwata (JMLC 2007)", swh: "Kugelwellen (SWH)", tractrix: "Tractrix", hypex: "Hypex (plane wave)", conical: "Conical", cd: "CD horn (Keele 1975)", biradial: "Yuichi biradial (after Arai)", os: "OS-SE waveguide (Bat\u00edk 2020)", osc: "Classic OS (Geddes 1989)", wn: "William Neile biradial (equal-path)", rosse: "R-OSSE (Bat\u00edk 2022)" };
   var LAW_FAMILIES = { jmlc: 1, jmlcell: 1, swh: 1, hypex: 1, cd: 1 , biradial: 1, wn: 1 };
   var PETF_FAMILIES = { jmlc: 1, swh: 1, hypex: 1 }; // PETF is published for round law horns, not for Keele CD
@@ -6160,7 +6170,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       '<main>' +
       '<div style="padding:12px 16px;border-bottom:1px solid var(--line)"><div class="eyebrow" style="margin-bottom:6px">3-D PREVIEW \u2014 DRAG ROTATE \u00b7 WHEEL ZOOM <button class="btn" id="showConstr" style="display:none;width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">SHOW CONSTRUCTION</button><button class="btn" id="dirOvBtn" style="width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">DIRECTIVITY: OFF</button><button class="btn" id="bemPrevBtn" style="width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">BEM MESH: OFF</button></div>' +
       '<div id="view3d" style="width:100%;height:380px;background:#FFFFFF;touch-action:none;cursor:grab"></div>' +
-      '<span id="buildstamp" style="font-family:var(--mono);font-size:9px;color:var(--faint);letter-spacing:0.08em">build 219 · 2026-07-21</span><div id="v3dnote" style="font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:6px;letter-spacing:.04em"></div></div>' +
+      '<span id="buildstamp" style="font-family:var(--mono);font-size:9px;color:var(--faint);letter-spacing:0.08em">build 220 · 2026-07-21</span><div id="v3dnote" style="font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:6px;letter-spacing:.04em"></div></div>' +
       '<div id="drawing" style="padding:10px 12px 0"></div>' +
       '<div class="legend" id="legend"></div><div class="stats" id="stats"></div>' +
       '<div style="padding:14px 16px 0 16px"><div class="eyebrow">REPORTS \u2014 1-D / GEOMETRIC ESTIMATES (NOT A BEM SUBSTITUTE)</div></div>' +
@@ -6243,9 +6253,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       for (var dk in fd) {
         if (!force9 && SHARED_KEEP[dk] && S._touched && S._touched[dk]) continue;   // the user set it; comparing profiles at constant inputs is the whole point
         S[dk] = fd[dk];
-        var nEl = document.getElementById("num_" + dk), rEl = document.getElementById("rng_" + dk);
-        if (nEl) nEl.value = fd[dk];
-        if (rEl) rEl.value = fd[dk];
+        syncParamInput(dk, fd[dk]);
       }
     }
     document.getElementById("familySel").addEventListener("change", function (e) {
@@ -6282,8 +6290,23 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     syncSymEligibility();
     var fdB = document.getElementById("famDefBtn");
     if (fdB) fdB.addEventListener("click", function () {
+      /* entry 220 (Marwan: "the family defaults button doesnt reset advanced
+         things like driver plate"): the button's tooltip promises "reset EVERY
+         parameter" -- it now keeps that promise. Baseline for every design key
+         (INIT_DEFAULTS, snapshotted before the autosave restore), family
+         reference values on top, driver entry zeroed (a per-family decision,
+         entry 200). KEPT: the family itself and the export-panel preferences
+         (bem*) -- those are workflow state, not design state. */
+      var KEEP9 = { family: 1, bemF: 1, bemSym: 1, bemTarget: 1, bemModel: 1, bemSrc: 1, bemPrev: 1, dirOv: 1, showConstr: 1 };
+      for (var rk9 in INIT_DEFAULTS) if (!KEEP9[rk9]) { S[rk9] = INIT_DEFAULTS[rk9]; syncParamInput(rk9, S[rk9]); }
+      ["exitDeg", "exitLen", "flareRV"].forEach(function (k0) { S[k0] = 0; syncParamInput(k0, 0); });
       applyFamilyDefaults(true);   // explicit reset, the user asked for a button instead of surprises
       S._touched = {};
+      [["throatSel", "throatShape"], ["lipSel", "lipStyle"], ["petfSel", "petfPreset"], ["sectSel", "section"]].forEach(function (sv9) {
+        var se9 = document.getElementById(sv9[0]); if (se9 && S[sv9[1]] !== undefined) se9.value = S[sv9[1]];
+      });
+      var fs9r = document.getElementById("finsSel"); if (fs9r) fs9r.value = S.fins;
+      syncSymEligibility();
       scheduleUpdate();
     });
     document.getElementById("petfSel").addEventListener("change", function (e) {
@@ -6403,6 +6426,8 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       }
       if (lastAct.petfConverged === false)
         return confirm("MOUTH-REFERENCED PETF DID NOT CONVERGE (residual " + (lastAct.petfResidual || 0).toFixed(2) + " mm" + (lastAct.petfCycleDetected ? ", cycle detected" : "") + ").\nThis geometry is NOT validated.\n\nExport anyway?");
+      if (lastAct.terminated === "fan-degenerate")   /* entry 220: the UI caps fc, but odd throat/adapter combinations can still reach this -- never export it silently */
+        return confirm("YUICHI FAN DEGENERATE: the kr = 1 mouth ends inside the adapter at these settings (fc too high for this throat/adapter) -- the sectoral architecture does not exist here.\nThis geometry is NOT valid.\n\nExport anyway?");
       return true;
     }
     document.getElementById("exStl").addEventListener("click", function () {
@@ -6742,6 +6767,18 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     var _tbF = document.getElementById("tbFam"); if (_tbF) _tbF.textContent = FAMILY_NAMES[S.family].toUpperCase().slice(0, 14);   // entry 124: box removed
   }
 
+  var PARAM_BY_KEY = {}; PARAMS.forEach(function (pb9) { PARAM_BY_KEY[pb9.key] = pb9; });
+  function syncParamInput(k9, v9) {
+    /* entry 220: ONE input-sync path, LOG-AWARE, at top scope (the first cut
+       nested it inside build() and validateInputs crashed -- caught by fuzz).
+       Raw writes into rng_ left the fc slider LYING after every family switch
+       since entry 208 -- the log dial holds a 0..1000 POSITION, not the value
+       (switching to biradial wrote 290 = position 290 = ~325 Hz displayed). */
+    var nE9 = document.getElementById("num_" + k9), rE9 = document.getElementById("rng_" + k9);
+    if (nE9) nE9.value = v9;
+    var pd9 = PARAM_BY_KEY[k9];
+    if (rE9) rE9.value = (pd9 && pd9.log) ? Math.round(1000 * Math.log(v9 / pd9.min) / Math.log(pd9.max / pd9.min)) : v9;
+  }
   function validateInputs() {
     // AUDIT #12: validate combinations BEFORE geometry; clamped values sync to the UI.
     var msgs = [];
@@ -6749,10 +6786,21 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     function syncKey(k, v) {
       if (S[k] === v) return;
       S[k] = v;
-      var nE = document.getElementById("num_" + k), rE = document.getElementById("rng_" + k);
-      if (nE) nE.value = v; if (rE) rE.value = v;
+      syncParamInput(k, v);   /* entry 220: log-aware (a raw write here would park the fc slider at full scale when clamping) */
     }
     if (S.family === "conical" && S.entryDeg < 2) { syncKey("entryDeg", 2); msgs.push("conical entry floored at 2\u00b0 (0\u00b0 is a pipe, not a cone)"); }
+    /* entry 220 (Marwan: "when you increase the biradial yuichi horn Fc it gets
+       messed up... Should we keep each family within sane limits?" -- yes, at
+       MEASURED construction boundaries): the Yuichi fan develops only while the
+       kr=1 mouth outruns the adapter -- above ~1 kHz (default throat) pass 1
+       terminates AT the adapter, the fan freezes near zero length and the rim
+       machinery inflates the degenerate mouth (measured: r 1.7 m at fc 10k, z
+       frozen at the adapter). The WN reference-mouth model collapses toward
+       zero depth (2.6 mm at fc 2000) and hard-NaNs past ~2.5 kHz. Both are
+       large-format architectures; iwata scales cleanly (fixed-proportion) and
+       stays uncapped. */
+    if (S.family === "biradial" && S.fc > 1000) { syncKey("fc", 1000); msgs.push("Yuichi biradial fc capped at 1000 Hz \u2014 above it the kr = 1 mouth shrinks into the adapter and the sectoral fan cannot develop (large-format mid-horn architecture)"); }
+    if (S.family === "wn" && S.fc > 1200) { syncKey("fc", 1200); msgs.push("WN fc capped at 1200 Hz \u2014 the reference-mouth construction collapses toward zero depth above it (non-finite geometry past ~2.5 kHz)"); }
     if (S.ribW > 0 && S.ribH > 0 && S.family !== "wn" && S.family !== "biradial") {
       var eqD9 = 2 * Math.sqrt(S.ribW * S.ribH / Math.PI);
       if (Math.abs(eqD9 - S.throatD) / S.throatD > 0.1)
