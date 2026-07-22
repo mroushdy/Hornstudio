@@ -346,18 +346,16 @@ function osseWall(P) {
   var s = Math.max(0, Math.min(2.5, P.osS === undefined ? 0.7 : P.osS));
   var nn = Math.max(2, Math.min(8, P.osN || 4)), q = 0.995;
   var ta = Math.tan(al), ta0 = Math.tan(a0);
-  // entry 219 (forum, triodehunter: "the same discontinuities as before with
-  // Classic OS also show up for OS-SE and R-OSSE when using the sliders for
-  // driver entry L"): the generic straight graft is as DOOMED here as entry
-  // 184 proved on the classic OS -- measured on THIS family: peak 52.8 deg vs
-  // 46.7 clean + 2 slope-direction reversals (the CAD ripples). Batik's
-  // formula 5 LAUNCHES at a0 natively, so the driver entry is built INTO the
-  // solve: throat radius grows by the straight run (r0' = r0 + Le*tan(a0)),
-  // the curve solves from r0', and the straight segment prepends at exactly
-  // tan(a0) -- C1 by construction, no blend, overshoot impossible.
-  // [restored 2026-07-21 after the entry-220 snapshot rollback]
-  var Le = Math.max(0, P.osEntryLen || 0), rtFlange = r0;
-  if (Le > 0) r0 = r0 + Le * ta0;
+  // entry 219 (forum: the generic straight graft rippled OS-SE -- 2 slope
+  // reversals, peak 52.8 vs 46.7 clean; the doomed-asymptote catch-up of
+  // entry 184). Batik's formula 5 LAUNCHES at a0 natively, so the driver
+  // entry needs no graft at all: a0 = half the driver exit angle and the
+  // curve leaves z=0 at exactly that slope. entry 221 (Hans, the entry-190
+  // reporter's standard: "the horn contour starts with linear values"): the
+  // 219 build prepended a PHYSICAL straight run -- but the cone is INSIDE
+  // THE DRIVER, exactly as entry 190 settled for the classic OS. v2 removes
+  // the run: geometry is the pure curve from z=0; Driver entry L feeds the
+  // Webster LOADING estimate only (the entry-192 treatment, extended here).
   var dKeele = 2.54e7 / (Math.max(30, covH) * f0);
   function rAt(z, L) {
     var gos = Math.sqrt(k * k * r0 * r0 + 2 * k * r0 * z * ta0 + z * z * ta * ta) + r0 * (1 - k);
@@ -374,13 +372,6 @@ function osseWall(P) {
   for (var i = 0; i < n2; i++) {
     var z = L * i / (n2 - 1);
     wall.push({ z: z, r: rAt(z, L) });
-  }
-  if (Le > 0) {
-    var pre = [], nP = Math.max(6, Math.round(Le));
-    for (var ip = 0; ip < nP; ip++) { var zp = Le * ip / nP; pre.push({ z: zp, r: rtFlange + zp * ta0 }); }
-    for (var iw = 0; iw < wall.length; iw++) wall[iw].z += Le;
-    wall = pre.concat(wall);
-    L += Le;
   }
   return { wall: wall, sEnd: L, terminated: "OSSE (Keele-width mouth)", Ttrace: [] };
 }
@@ -1716,16 +1707,14 @@ function rosseWall(P) {
   // so use ===undefined defaults, not || (falsy-zero once made the UI show 0 while building 7.5).
   var R = P.rosR || 130, aDeg = P.rosA || 39, a0 = (P.rosA0 === undefined ? 7.5 : P.rosA0) * Math.PI / 180;
   var k = P.rosK !== undefined ? P.rosK : 1.8, rr = P.rosRr !== undefined ? P.rosRr : 0.3, bb = P.rosB === undefined ? 0.3 : P.rosB, mm = P.rosM !== undefined ? P.rosM : 0.8, qq = P.rosQ !== undefined ? P.rosQ : 3.7; // AUDIT #14: zero is a valid published value; || silently replaced it
-  // entry 219 (same forum report as osseWall): native driver entry. The
-  // R-OSSE's GEOMETRIC launch slope is NOT tan(a0) -- the x-parameterization
-  // is not unit-speed (dx/dt|0 = L*m/A1, dy/dt|0 = L*tan(a0)), so the true
-  // tangent is s0 = tan(a0)*sqrt(rr^2+m^2)/m (measured 0.1506 vs 0.1406 raw
-  // tan on the ST260 defaults BEFORE this was accounted for). The straight
-  // run and the enlarged throat both use s0 -- the junction is C1 exactly.
-  // [restored 2026-07-21 after the entry-220 snapshot rollback]
-  var s0e = Math.tan(a0) * Math.sqrt(rr * rr + mm * mm) / Math.max(1e-6, mm);
-  var Le = Math.max(0, P.osEntryLen || 0), rtFlange = r0;
-  if (Le > 0) r0 = r0 + Le * s0e;
+  // entry 221 (Hans, after 219: "the horn contour starts with linear
+  // values"): the 219 prepend is REMOVED -- the driver's cone stays in the
+  // driver (the entry-190 standard the classic OS already follows). The
+  // R-OSSE is the pure published curve from z=0, launching at the a0 dial;
+  // note for anyone measuring it: the GEOMETRIC launch slope is
+  // tan(a0)*sqrt(rr^2+m^2)/m, not tan(a0) -- the x-parameterization is not
+  // unit-speed (dx/dt|0 = L*m/A1, dy/dt|0 = L*tan(a0)); measured 0.1506
+  // first-chord vs 0.1406 raw tan on the ST260 defaults.
   var c1 = (k * r0) * (k * r0);
   var c2 = 2 * k * r0 * Math.tan(a0);
   var c3 = Math.pow(Math.tan(aDeg * Math.PI / 180), 2);
@@ -1741,12 +1730,6 @@ function rosseWall(P) {
     var y = (1 - Math.pow(t, qq)) * (Math.sqrt(c1 + c2 * L * t + c3 * L * L * t * t) - r0 * (k - 1))
           + Math.pow(t, qq) * (R + L * (1 - Math.sqrt(1 + c3 * (t - 1) * (t - 1))));
     wall.push({ z: x, r: y });
-  }
-  if (Le > 0) {
-    var pre = [], nP = Math.max(6, Math.round(Le));
-    for (var ip = 0; ip < nP; ip++) { var zp = Le * ip / nP; pre.push({ z: zp, r: rtFlange + zp * s0e }); }
-    for (var iw = 0; iw < wall.length; iw++) wall[iw].z += Le;
-    wall = pre.concat(wall);
   }
   return { wall: wall, sEnd: wall[wall.length - 1].z, terminated: "t=1 (self-terminated)", Ttrace: [] };
 }
@@ -5297,7 +5280,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
   function esc(x) { return x.toFixed(2); }
 
   function hornParams(petfOverride) {
-    return { family: S.family, cdRound: S.family === "cd" && S.section !== "rrect", fc: S.fc, rt: (S.throatShape === "rect" && S.ribW > 0 && S.ribH > 0) ? Math.sqrt(S.ribW * S.ribH / Math.PI) : S.throatD / 2, /* entry 94: rect throat defines the area; rt = area-equivalent */ entryDeg: S.family === "os" ? (S.exitDeg || 0) / 2 : S.entryDeg, /* entry 219: os's a0 IS formula 5's throat angle -- driven by the driver exit dial (included -> half), never by jmlc's stale entryDeg */ osEntryLen: (S.family === "os" || S.family === "rosse") ? (S.exitLen || 0) : 0, T0: S.T0, adaptL: S.adaptL, aplat: S.aplat, ellMu: S.ellMu, ellSigma: S.ellSigma, decoupeN: S.decoupeN, decoupeP: S.decoupeP, iwExitD: S.iwExitD, wnCovH: S.wnCovH, wnCovV: S.wnCovV, trunc: S.family === "jmlc" ? Math.min(268, S.trunc + S.flareWrap) : S.trunc, /* jmlc: wrap EXTENDS the native roll -- no invented arc */
+    return { family: S.family, cdRound: S.family === "cd" && S.section !== "rrect", fc: S.fc, rt: (S.throatShape === "rect" && S.ribW > 0 && S.ribH > 0) ? Math.sqrt(S.ribW * S.ribH / Math.PI) : S.throatD / 2, /* entry 94: rect throat defines the area; rt = area-equivalent */ entryDeg: S.family === "os" ? (S.exitDeg || 0) / 2 : S.entryDeg, /* entry 219/221: os's a0 IS formula 5's throat angle -- driven by the driver exit dial (included -> half), never by jmlc's stale entryDeg; the curve launches from z=0, no linear run (the cone is inside the driver, entry-190 standard) */ T0: S.T0, adaptL: S.adaptL, aplat: S.aplat, ellMu: S.ellMu, ellSigma: S.ellSigma, decoupeN: S.decoupeN, decoupeP: S.decoupeP, iwExitD: S.iwExitD, wnCovH: S.wnCovH, wnCovV: S.wnCovV, trunc: S.family === "jmlc" ? Math.min(268, S.trunc + S.flareWrap) : S.trunc, /* jmlc: wrap EXTENDS the native roll -- no invented arc */
       petf: petfOverride === undefined ? (S.petf && PETF_FAMILIES[S.family]) : petfOverride,
       petfShape: S.petfShape, petfRef: S.petfRef, wnUL: S.wnUL, wnUC: S.wnUC, wnFins: S.wnFins, fins: S.fins, finT: S.finT,   /* entry 171: the wall law needs the fin mode (blockage compensation) */ Tadd: S.Tadd, fmult: S.fmult, sOff: S.sOff, cornerR: S.cornerR, covH: S.covH, covV: S.covV, f0: S.f0, f0V: S.f0V, osK: S.osK, osS: S.osS, osN: S.osN, rosR: S.rosR, rosA: S.rosA, rosA0: S.rosA0, rosK: S.rosK, rosRr: S.rosRr, rosB: S.rosB, rosM: S.rosM, rosQ: S.rosQ };
   }
@@ -5921,7 +5904,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     { key: "decoupeN", label: "D\u00e9coupe n (V-plate cut fraction)", unit: "", min: 0, max: 0.6, step: 0.01, sect: "core", fams: { iwata: 1 } },
     { key: "decoupeP", label: "D\u00e9coupe puissance (cliff sharpness)", unit: "", min: 0.5, max: 12, step: 0.5, sect: "core", fams: { iwata: 1 } },
     { key: "covH", label: "H coverage (\u22126 dB)", unit: "\u00b0", min: 40, max: 140, step: 5, sect: "core", fams: { cd: 1, os: 1, osc: 1, biradial: 1 } },
-    { key: "f0", label: "Pattern control to f\u2080", unit: "Hz", min: 300, max: 2000, step: 25, sect: "core", fams: { cd: 1, os: 1, osc: 1 } },
+    { key: "f0", label: "Pattern control to f\u2080", unit: "Hz", min: 200, max: 2000, step: 25, sect: "core", fams: { cd: 1, os: 1, osc: 1 } },   /* entry 221 (Hans, 100 cm multi-entry horn): 200 Hz floor -- Keele width at 90x200 = 1.41 m, the big-horn regime */
     { key: "f0V", label: "V intercept f\u2080V (0 = auto)", unit: "Hz", min: 0, max: 4000, step: 25, sect: "core", fams: { cd: 1 } },
     { key: "osK", label: "k \u2014 throat expansion", unit: "", min: 0.5, max: 4, step: 0.05, sect: "core", fams: { os: 1 } },
     { key: "osS", label: "s \u2014 termination flare", unit: "", min: 0, max: 2, step: 0.05, sect: "core", fams: { os: 1 } },
@@ -5953,10 +5936,10 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     { key: "wnFinU1", label: "Fin end (u)", unit: "", min: 0.3, max: 1.0, step: 0.02, sect: "geo", fams: { wn: 1 } },
     { key: "flareWrap", label: "Roundover wrap past mouth", unit: "\u00b0", min: 0, max: 135, step: 5, sect: "geo", notFams: { iwata: 1 } },
     { key: "flareRV", label: "V roll depth (taper; 0 = full)", unit: "mm", min: 0, max: 80, step: 1, sect: "geo", fams: { wn: 1 } },   /* entry 186: per-plane rollback -- deep sides contain H while shallow top/bottom leaves the V rim near-bare at LF (the WN300ALO-style combination experiment) */   /* entry 167: wn UN-GATED -- surface-frame lip (T x R, global sign) + master-subsample fixed the entry-158/160 breakage */
-    { key: "flareR", label: "Mouth roundover R", unit: "mm", min: 0, max: 100, step: 2, sect: "geo", notFams: { jmlc: 1, iwata: 1 } },   /* entry 167: wn un-gated */
+    { key: "flareR", label: "Mouth roundover R", unit: "mm", min: 0, max: 200, step: 2, sect: "geo", notFams: { jmlc: 1, iwata: 1 } },   /* entry 167: wn un-gated */ /* entry 221 (Hans): 200 mm ceiling for generous roundovers on ~1 m mouths -- roll battery verified at 200 */
     { key: "thick", label: "Wall thickness (3-D)", unit: "mm", min: 2, max: 12, step: 0.5, sect: "geo" },   /* entry 176: universal -- the wn gate hid the control while S.thick silently drove its shell anyway (the entry-152 iwata trap, again) */
     { key: "iwExitD", label: "Driver exit \u00d8 cut (0 = full neck)", unit: "mm", min: 0, max: 76.2, step: 0.1, sect: "geo", fams: { iwata: 1 } },
-    { key: "exitLen", label: "Driver entry L (osc: loading only)", unit: "mm", min: 0, max: 40, step: 1, sect: "geo", notFams: { cd: 1, wn: 1, biradial: 1, iwata: 1 } },   /* entry 192: restored for osc as a LOADING-ONLY term -- the driver internal cone enters the Webster area law behind z=0, never the exported geometry (the reporter said this info is crucial for loading; honored precisely) */
+    { key: "exitLen", label: "Driver entry L (osc/os: loading only)", unit: "mm", min: 0, max: 40, step: 1, sect: "geo", notFams: { cd: 1, wn: 1, biradial: 1, iwata: 1, rosse: 1 } },   /* entry 221: rosse hides it -- the a0 dial owns the launch; osc/os keep it as the LOADING-ONLY driver bore (entry 192) */   /* entry 192: restored for osc as a LOADING-ONLY term -- the driver internal cone enters the Webster area law behind z=0, never the exported geometry (the reporter said this info is crucial for loading; honored precisely) */
     { key: "exitDeg", label: "Driver exit angle (included)", unit: "\u00b0", min: 0, max: 30, step: 0.5, sect: "geo", notFams: { cd: 1, wn: 1, biradial: 1, iwata: 1, rosse: 1 } },   /* entry 219: rosse's launch angle is its own a0 dial -- a second angle control would fight it (rule 6: remove, don't disable) */
     { key: "plateT", label: "Driver plate thickness (0 = off)", unit: "mm", min: 0, max: 40, step: 0.5, sect: "geo" },
     { key: "plateD", label: "Plate outer \u00d8 (0 = auto)", unit: "mm", min: 0, max: 320, step: 1, sect: "geo" },
@@ -6018,7 +6001,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     } else {
       if (lastAct) lastAct.websterCoordinateLength = lastAct.axialDepth || null;
       var chartProf3 = actProf.spApplied ? profOf(lastAct, 300) : actProf;
-      if (S.family === "osc" && S.exitLen > 0 && S.exitDeg > 0 && chartProf3 && chartProf3.H) {
+      if ((S.family === "osc" || S.family === "os") && S.exitLen > 0 && S.exitDeg > 0 && chartProf3 && chartProf3.H) {   /* entry 221: os joins the loading-only bore */
         /* entry 192: the driver INTERNAL cone as a LOADING-ONLY prepend -- the
            Webster area law extends behind z=0 through the driver bore to the
            phase plug (his original point: "crucial for accurately calculating
@@ -6032,7 +6015,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
         chartProf3 = Object.assign({}, chartProf3, { H: pre3(chartProf3.H), V: pre3(chartProf3.V), baseStations: (chartProf3.baseStations || 0) + 6 });
       }
       var zHtml3 = zChartSVG(throatImpedance(chartProf3, fArr, "axial"), col);
-      if (S.family === "osc" && S.exitLen > 0 && S.exitDeg > 0) {
+      if ((S.family === "osc" || S.family === "os") && S.exitLen > 0 && S.exitDeg > 0) {
         /* entry 197: the bore's acoustic effect at realistic lengths is ~1%
            (real, honest, and invisible at chart scale) -- so the chart
            DECLARES the model state instead of pretending drama */
@@ -6170,7 +6153,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       '<main>' +
       '<div style="padding:12px 16px;border-bottom:1px solid var(--line)"><div class="eyebrow" style="margin-bottom:6px">3-D PREVIEW \u2014 DRAG ROTATE \u00b7 WHEEL ZOOM <button class="btn" id="showConstr" style="display:none;width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">SHOW CONSTRUCTION</button><button class="btn" id="dirOvBtn" style="width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">DIRECTIVITY: OFF</button><button class="btn" id="bemPrevBtn" style="width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">BEM MESH: OFF</button></div>' +
       '<div id="view3d" style="width:100%;height:380px;background:#FFFFFF;touch-action:none;cursor:grab"></div>' +
-      '<span id="buildstamp" style="font-family:var(--mono);font-size:9px;color:var(--faint);letter-spacing:0.08em">build 220 · 2026-07-21</span><div id="v3dnote" style="font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:6px;letter-spacing:.04em"></div></div>' +
+      '<span id="buildstamp" style="font-family:var(--mono);font-size:9px;color:var(--faint);letter-spacing:0.08em">build 221 · 2026-07-22</span><div id="v3dnote" style="font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:6px;letter-spacing:.04em"></div></div>' +
       '<div id="drawing" style="padding:10px 12px 0"></div>' +
       '<div class="legend" id="legend"></div><div class="stats" id="stats"></div>' +
       '<div style="padding:14px 16px 0 16px"><div class="eyebrow">REPORTS \u2014 1-D / GEOMETRIC ESTIMATES (NOT A BEM SUBSTITUTE)</div></div>' +
@@ -6723,7 +6706,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       var hvActive = S.petf && PETF_FAMILIES[S.family] && (S.TaddV !== S.Tadd || S.fmultV !== S.fmult);
       if (hvActive && (p.key === "aspect" || p.key === "flareR" || p.key === "flareWrap" || p.key === "cornerR" || p.key === "seN")) ok = false; // az-loft: per-plane PETF params ARE the shaping; rollbacks are the mouth
       if ((p.key === "ribW" || p.key === "ribH" || p.key === "ribL") && (S.family === "wn" || S.family === "biradial" || S.family === "iwata")) ok = false;   // entry 101: specialized throats
-      if (p.key === "exitDeg" && !(S.exitLen > 0) && S.family !== "osc") ok = false;   // entry 104: sub-params follow their master; entry 192: EXCEPT osc, where the angle IS the master (it launches the OS from z=0)
+      if (p.key === "exitDeg" && !(S.exitLen > 0) && S.family !== "osc" && S.family !== "os") ok = false;   // entry 104: sub-params follow their master; entries 192/221: EXCEPT osc and os, where the angle IS the master (it launches the waveguide from z=0)
       if ((p.key === "plateD" || p.key === "boltN" || p.key === "boltCircleD" || p.key === "boltHoleD" || p.key === "boltRot") && !(S.plateT > 0)) ok = false;
       if ((p.key === "ribW" || p.key === "ribH") && S.throatShape !== "rect") ok = false;   // entry 93: the toggle drives them
       if (p.key === "ribL" && S.throatShape === "round") ok = false;
@@ -6940,8 +6923,8 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
         biradial: 'Biradial \u2014 Arai optimized (built from Yuichi Arai\u2019s public plans + the open A-290 BEM study): sidewall is Yuichi\u2019s ARC through the throat and mouth end points with END tangent = covH/2 (the 95\u00b0 construction line) \u2014 flat before curving out; its chord runs at \u22480.78\u00b7covH/2. Vertical solves the hyp-ex area law (rect accounting); round\u2192square throat, no pinch; kr = 1 loading mouth. Fin layout (optional, in stats): 6 fins, gaps 7.5/15/15/15/7.5\u00b0 scaled by covH/95, one common origin. Round the mouth generously (wrap slider) \u2014 the study\u2019s first-priority improvement.',
         wn: 'William Neile biradial \u2014 a member of the WN horn class (Ahlswede 2021; see PROVENANCE) \u2014 FULLY PARAMETRIC. Horizontal: cone + true Neile semicubical term (a = r\u209c + tan\u03b8\u2080\u00b7z + K\u00b7z^1.5) through the control zone, then a C1 Hermite terminal flare to dimensionless mouth laws. Vertical: the hypex construction-wavefront area law computed from YOUR fc and T through the loading zone (u\u2097), control blend to u\u1d04, Hermite terminal flare. Every horizontal trajectory is solved to identical arc length (the equal-path property). Fourteen dimensionless \u03bc-linear coefficients; two reference geometries verify the model in the test suite only. Finless is the reference form. Named for William Neile, 1657: the first rectification of the semicubical parabola.',
       osc: 'Classic OS waveguide (Geddes, JAES 1989): r(z) = \u221a(r\u209c\u00b2 + (z\u00b7tan\u03b8)\u00b2), \u03b8 = coverage half-angle; Keele-width mouth sizing. The derivation is AXISYMMETRIC (oblate-spheroidal coordinates): a round section is the published solution; an ellipse (per-axis stretch) is the accepted engineering approximation; a SQUARE/rrect section is a geometric extrusion only \u2014 the corner regions have no OS wavefront support. No superellipse termination (see OS-SE for Bat\u00edk\u2019s variant).',
-      os: 'OS-SE (Bat\u00edk 2020, formula 5 \u2014 what this family computes): throat angle \u03b1\u2080, expansion k, superellipse termination; Keele-width sized mouth. The classic Geddes 1989 OS (r = \u221a(r\u209c\u00b2 + (z\u00b7tan\u03b8)\u00b2)) exists engine-side; a Classic-OS selector is on the roadmap. Driver entry: \u03b1\u2080 = half the driver exit angle and the entry length becomes part of the SOLVE (throat grows by the straight run, curve launches at exactly that angle) \u2014 C1 by construction, no graft.',
-        rosse: 'R-OSSE (Bat\u00edk 2022): the exact published parametric formula incl. rollback termination \u2014 validated here against the paper\u2019s ST260 reference (a\u2080 = 0 and b = 0 are paper-valid inputs). Driver entry L prepends a straight run TANGENT to the curve\u2019s true launch slope (a\u2080 corrected for the formula\u2019s non-unit-speed parameterization) and re-solves from the grown throat \u2014 C1 by construction; the launch angle is the a\u2080 dial.'
+      os: 'OS-SE (Bat\u00edk 2020, formula 5 \u2014 what this family computes): throat angle \u03b1\u2080, expansion k, superellipse termination; Keele-width sized mouth. The classic Geddes 1989 OS (r = \u221a(r\u209c\u00b2 + (z\u00b7tan\u03b8)\u00b2)) exists engine-side; a Classic-OS selector is on the roadmap. Driver entry: \u03b1\u2080 = half the driver exit angle and the curve LAUNCHES from z = 0 at exactly that slope \u2014 no linear run, the cone is inside the driver (entry-190 standard); Driver entry L feeds the Webster loading estimate only.',
+        rosse: 'R-OSSE (Bat\u00edk 2022): the exact published parametric formula incl. rollback termination \u2014 validated here against the paper\u2019s ST260 reference (a\u2080 = 0 and b = 0 are paper-valid inputs). The curve launches from z = 0 at the a\u2080 dial \u2014 set a\u2080 to half your driver\u2019s exit angle; no linear run, no separate driver-entry dials (the cone is inside the driver).'
       };
       var t = F[S.family] || "";
       if (S.family !== "cd" && S.family !== "biradial")
