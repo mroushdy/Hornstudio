@@ -821,7 +821,13 @@ function keele82Wall(P) {
            WH: (gov === gh ? gov : slot).W, WV: (gov === gh ? slot : gov).W };
 }
 
-function planeProfilesWN(horn, nPts, flareRh, flareRv, flareExit, rho, shape2) {
+function planeProfilesWN(horn, nPts, flareRh, flareRv, flareExit, rho, shape2, rhoTarget) {
+  // rhoTarget (entry 228, optional -- ONLY the osc per-axis caller passes it):
+  // user-dialed mouth corner radius for rrect sections, paced by the entry-204
+  // relative ramp from the local fully-round corner (min of the per-axis radii,
+  // = exact circle at the round throat) toward the target. Callers that omit it
+  // (wn/cd/biradial) keep the historic WN convention rho = const -- their
+  // geometry is BIT-IDENTICAL (baseline-verified).
   var Hp = dec(horn.wall, nPts), Vp = dec(horn.wallV, nPts);
   var rhoArr = horn.rhoTrk ? dec(horn.rhoTrk, nPts) : null;
   // AUDIT #5: insert EXACT critical stations into all three parallel arrays together
@@ -843,7 +849,24 @@ function planeProfilesWN(horn, nPts, flareRh, flareRv, flareExit, rho, shape2) {
     }
   }
   var ra = rhoArr ? rhoArr.slice() : [];
-  if (!rhoArr) for (var k2 = 0; k2 < Hp.length; k2++) ra.push(rho);
+  if (!rhoArr && shape2 === "rrect" && typeof rhoTarget === "number" && isFinite(rhoTarget)) {
+    // entry-204 pacing (same law as planeProfiles): small corner targets finish
+    // the rho ramp by u = 0.35 (round-to-sharp in the first third, then sharp
+    // edges); large targets keep the full smoothstep. Start value per station is
+    // the LOCAL fully-round corner min(a,b) so the throat stays an exact circle.
+    var cumR = [0];
+    for (var cri = 1; cri < Hp.length; cri++)
+      cumR.push(cumR[cri - 1] + Math.hypot(Hp[cri].z - Hp[cri - 1].z, Hp[cri].r - Hp[cri - 1].r));
+    var totR = cumR[cumR.length - 1] || 1;
+    var tgtR = Math.max(0, rhoTarget);
+    var sharpR = Math.max(0, Math.min(1, 1 - tgtR / 40));
+    var uTR = 1 + (0.35 - 1) * sharpR;
+    for (var k3 = 0; k3 < Hp.length; k3++) {
+      var uR = Math.min(1, (cumR[k3] / totR) / uTR), wRR = uR * uR * (3 - 2 * uR);
+      var rnd3 = Math.min(Hp[k3].r, Vp[k3].r);
+      ra.push(Math.min(0.999 * rnd3, rnd3 + (tgtR - rnd3) * wRR));
+    }
+  } else if (!rhoArr) for (var k2 = 0; k2 < Hp.length; k2++) ra.push(rho);
   var FS = 14;
   var seNArr2 = null;
   if (shape2 && shape2.indexOf("sellipse") === 0) {
@@ -5437,7 +5460,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       return planeProfilesWN(horn, n, S.flareR, S.flareR, 90 + S.flareWrap, S.throatD / 2, "rrect");
     }
     if (S.family === "wn") return planeProfilesWN(horn, n, S.flareR, S.flareR, 90 + S.flareWrap, S.throatD / 2, "rrect"); // per-station rho from rhoTrk (round-throat corner quadrants)
-    if (S.family === "osc" && horn.wallV) return planeProfilesWN(horn, n, S.flareR, S.flareR, 90 + S.flareWrap, S.throatD / 2, "ellipse"); // per-axis Geddes: covH/covV drive independent OS laws, elliptical sections
+    if (S.family === "osc" && horn.wallV) return planeProfilesWN(horn, n, S.flareR, S.flareR, 90 + S.flareWrap, S.throatD / 2, shp, S.section === "rrect" ? S.cornerR : undefined); // per-axis Geddes: covH/covV drive independent OS laws; entry 228 ("I would like to support those square horns"): the section morph passes through -- rrect/sellipse are honest geometric extrusions between the two OS laws (cornerR paced by the entry-204 ramp, exact circle at the throat)
     if (S.family === "biradial") return planeProfilesWN(horn, n, 0, S.flareR, 90 + S.flareWrap, S.throatD / 2, "rrect"); // H stays wing-flat (plates end at the wings); V carries the roundover -- the top/bottom plates are what physically get rolled
     if (S.family === "swh" && S.aspect > 1.001) {
       // elliptical SWH via ellipsoidal wavefronts (published 2019 method)
@@ -6246,7 +6269,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       '<main>' +
       '<div style="padding:12px 16px;border-bottom:1px solid var(--line)"><div class="eyebrow" style="margin-bottom:6px">3-D PREVIEW \u2014 DRAG ROTATE \u00b7 WHEEL ZOOM <button class="btn" id="showConstr" style="display:none;width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">SHOW CONSTRUCTION</button><button class="btn" id="dirOvBtn" style="width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">DIRECTIVITY: OFF</button><button class="btn" id="bemPrevBtn" style="width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">BEM MESH: OFF</button></div>' +
       '<div id="view3d" style="width:100%;height:380px;background:#FFFFFF;touch-action:none;cursor:grab"></div>' +
-      '<span id="buildstamp" style="font-family:var(--mono);font-size:9px;color:var(--faint);letter-spacing:0.08em">build 227 · 2026-07-29</span><div id="v3dnote" style="font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:6px;letter-spacing:.04em"></div></div>' +
+      '<span id="buildstamp" style="font-family:var(--mono);font-size:9px;color:var(--faint);letter-spacing:0.08em">build 228 · 2026-07-29</span><div id="v3dnote" style="font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:6px;letter-spacing:.04em"></div></div>' +
       '<div id="drawing" style="padding:10px 12px 0"></div>' +
       '<div class="legend" id="legend"></div><div class="stats" id="stats"></div>' +
       '<div style="padding:14px 16px 0 16px"><div class="eyebrow">REPORTS \u2014 1-D / GEOMETRIC ESTIMATES (NOT A BEM SUBSTITUTE)</div></div>' +
@@ -6792,7 +6815,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
   var pending = false;
   function scheduleUpdate() { if (pending) return; pending = true; setTimeout(function () { pending = false; update(); }, 90); }
 
-  var SECTION_ALLOWED = { os: ["ellipse"], osc: ["ellipse"], cd: ["rrect", "ellipse"], jmlcell: ["ellipse"] }; // OS: derivation is axisymmetric (ellipse = per-axis form); cd: the Keele recipe defines rect + round only; biradial: section is intrinsic (select hidden); jmlcell (entry 227, user report "rounded rectangle doesnt always work on every family"): the quasi-elliptical MORPH IS the section law -- the profile path hardcodes ellipse (entry 90), so offering rrect/sellipse drew a section overlay the solid never had (STL byte-identical, verified live). Want a rounded-rect JMLC? That is jmlc + rrect, which works.
+  var SECTION_ALLOWED = { cd: ["rrect", "ellipse"], jmlcell: ["ellipse"] }; // cd: the Keele recipe defines rect + round only; biradial: section is intrinsic (select hidden); jmlcell (entry 227, user report "rounded rectangle doesnt always work on every family"): the quasi-elliptical MORPH IS the section law -- the profile path hardcodes ellipse (entry 90), so offering rrect/sellipse drew a section overlay the solid never had (STL byte-identical, verified live). Want a rounded-rect JMLC? That is jmlc + rrect, which works. os/osc UN-GATED at entry 228 (Marwan: "I would like to support those square horns" -- community/Ath practice): sections there are labeled geometric extrusions; the corner regions carry no OS wavefront support (blurbs say so; BEM arbitrates).
     function sectionOptionsFor(fam) { return (fam === "biradial" || fam === "wn" || fam === "iwata") ? null : (SECTION_ALLOWED[fam] || ["ellipse", "sellipse", "rrect"]); }   // iwata: sections are the decoded grid
     function applicability() {
       var _sopt = sectionOptionsFor(S.family);
@@ -7043,8 +7066,8 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
         cd: 'CD (Keele 1975, production recipe from his preprint): 0.5\u2033 round\u2192rect transition, then straight wedges at half the throat included angle A = 0.9\u00b7B per plane (Fig.19c) while the VERTICAL maintains the hyp-ex law until its wedge; Fig.16 doubles included angles over the last third; BOTH planes scheduled to ONE mouth plane sized to Keele width d = 2.54\u00d710\u2077/(\u03b8\u00b7f\u2080) per plane (eq.2 aspect when f\u2080V auto), kr mouth-area floor. Round section = the CE variant: hyp-ex throat, eq.(7) directivity-matched conical join, 80\u00b0 last-third flare.',
         biradial: 'Biradial \u2014 Arai optimized (built from Yuichi Arai\u2019s public plans + the open A-290 BEM study): sidewall is Yuichi\u2019s ARC through the throat and mouth end points with END tangent = covH/2 (the 95\u00b0 construction line) \u2014 flat before curving out; its chord runs at \u22480.78\u00b7covH/2. Vertical solves the hyp-ex area law (rect accounting); round\u2192square throat, no pinch; kr = 1 loading mouth. Fin layout (optional, in stats): 6 fins, gaps 7.5/15/15/15/7.5\u00b0 scaled by covH/95, one common origin. Round the mouth generously (wrap slider) \u2014 the study\u2019s first-priority improvement.',
         wn: 'William Neile biradial \u2014 a member of the WN horn class (Ahlswede 2021; see PROVENANCE) \u2014 FULLY PARAMETRIC. Horizontal: cone + true Neile semicubical term (a = r\u209c + tan\u03b8\u2080\u00b7z + K\u00b7z^1.5) through the control zone, then a C1 Hermite terminal flare to dimensionless mouth laws. Vertical: the hypex construction-wavefront area law computed from YOUR fc and T through the loading zone (u\u2097), control blend to u\u1d04, Hermite terminal flare. Every horizontal trajectory is solved to identical arc length (the equal-path property). Fourteen dimensionless \u03bc-linear coefficients; two reference geometries verify the model in the test suite only. Finless is the reference form. Named for William Neile, 1657: the first rectification of the semicubical parabola.',
-      osc: 'Classic OS waveguide (Geddes, JAES 1989): r(z) = \u221a(r\u209c\u00b2 + (z\u00b7tan\u03b8)\u00b2), \u03b8 = coverage half-angle; Keele-width mouth sizing. The derivation is AXISYMMETRIC (oblate-spheroidal coordinates): a round section is the published solution; an ellipse (per-axis stretch) is the accepted engineering approximation; a SQUARE/rrect section is a geometric extrusion only \u2014 the corner regions have no OS wavefront support. No superellipse termination (see OS-SE for Bat\u00edk\u2019s variant).',
-      os: 'OS-SE (Bat\u00edk 2020, formula 5 \u2014 what this family computes): throat angle \u03b1\u2080, expansion k, superellipse termination; Keele-width sized mouth. The classic Geddes 1989 OS (r = \u221a(r\u209c\u00b2 + (z\u00b7tan\u03b8)\u00b2)) exists engine-side; a Classic-OS selector is on the roadmap. Driver entry: \u03b1\u2080 = half the driver exit angle and the curve LAUNCHES from z = 0 at exactly that slope \u2014 no linear run, the cone is inside the driver (entry-190 standard); Driver entry L feeds the Webster loading estimate only.',
+      osc: 'Classic OS waveguide (Geddes, JAES 1989): r(z) = \u221a(r\u209c\u00b2 + (z\u00b7tan\u03b8)\u00b2), \u03b8 = coverage half-angle; Keele-width mouth sizing. The derivation is AXISYMMETRIC (oblate-spheroidal coordinates): a round section is the published solution; an ellipse (per-axis stretch) is the accepted engineering approximation; a SQUARE/rrect or superellipse section is offered as a GEOMETRIC EXTRUSION (the community\u2019s printed practice, Ath-style) \u2014 the corner regions have no OS wavefront support, so corner directivity is not OS-predicted; run the BEM export to arbitrate. No superellipse termination (see OS-SE for Bat\u00edk\u2019s variant).',
+      os: 'OS-SE (Bat\u00edk 2020, formula 5 \u2014 what this family computes): throat angle \u03b1\u2080, expansion k, superellipse termination; Keele-width sized mouth. The classic Geddes 1989 OS (r = \u221a(r\u209c\u00b2 + (z\u00b7tan\u03b8)\u00b2)) exists engine-side; a Classic-OS selector is on the roadmap. Driver entry: \u03b1\u2080 = half the driver exit angle and the curve LAUNCHES from z = 0 at exactly that slope \u2014 no linear run, the cone is inside the driver (entry-190 standard); Driver entry L feeds the Webster loading estimate only. Sections: the SE in OS-SE is the axial mouth-termination law, NOT a cross-section; square/rrect and superellipse CROSS-SECTIONS are offered as geometric extrusions (the community\u2019s printed practice) \u2014 the derivation is axisymmetric, corners are outside it; BEM arbitrates.',
         rosse: 'R-OSSE (Bat\u00edk 2022): the exact published parametric formula incl. rollback termination \u2014 validated here against the paper\u2019s ST260 reference (a\u2080 = 0 and b = 0 are paper-valid inputs). The curve launches from z = 0 at the a\u2080 dial \u2014 set a\u2080 to half your driver\u2019s exit angle; no linear run, no separate driver-entry dials (the cone is inside the driver).'
       };
       var t = F[S.family] || "";
