@@ -344,7 +344,7 @@ function osseWall(P) {
   var a0 = Math.max(0, Math.min(25, P.entryDeg || 0)) * Math.PI / 180;
   var k = Math.max(0.3, Math.min(4, P.osK || 1));
   var s = Math.max(0, Math.min(2.5, P.osS === undefined ? 0.7 : P.osS));
-  var nn = Math.max(2, Math.min(8, P.osN || 4)), q = 0.995;
+  var nn = Math.max(2, Math.min(12, P.osN || 4)), q = 0.995;   // entry 229: ceiling 8 -> 12 (Hans wants >= 10)
   var ta = Math.tan(al), ta0 = Math.tan(a0);
   // entry 219 (forum: the generic straight graft rippled OS-SE -- 2 slope
   // reversals, peak 52.8 vs 46.7 clean; the doomed-asymptote catch-up of
@@ -2744,26 +2744,67 @@ function straightEntry(wall, rt, exDeg, exLen) {
   return out;
 }
 function throatRibbonMorph(prof, Wmm, Hmm, Lmm) {
+  // entry 229 REWRITE (Hans, third review: "The rectangular versions continue to
+  // exhibit discontinuities"). The old morph pulled each plane MULTIPLICATIVELY
+  // toward its target on a smoothstep: launch slope 0 (a flat start -- the exact
+  // "linear values" class his entry-221 report banned) and, whenever the target
+  // half-width exceeded the wall's start radius (every ribbon's WIDE plane), a
+  // WAIST: r dipped below W/2 then recovered -- one guaranteed slope reversal,
+  // measured on os/rosse/jmlc alike (bench_ribbon.js). Per-plane strategies now:
+  //   wide plane (target > wall start): Z-SHIFT INTO THE FAMILY CURVE -- find zS
+  //     where the wall reaches the target, then r(z) = wall(z + zS*(1-e)). The
+  //     contour IS the family curve at the throat (native slope AT the target
+  //     radius, C1 everywhere, monotone while zS*max e'/L < 1 -- L is auto-
+  //     extended to 2.2*zS to guarantee it), easing to the untouched wall by L.
+  //   narrow plane (target <= wall start): NATIVE-SLOPE SCALING -- r(z) =
+  //     wall(z) * (s + (1-s)e), s = target/start. Launch slope = s * native
+  //     (nonzero), every term positive => monotone by construction.
+  // e = quintic smootherstep (e'(0)=e''(0)=0): C2 at both ends of the blend.
   if (!(Wmm > 0 && Hmm > 0) || !prof || !prof.H || !prof.V) return prof;
   var Hp = prof.H, Vp = prof.V, B = prof.baseStations || Hp.length;
-  var L = Lmm > 0 ? Lmm : 2 * Math.max(Wmm, Hmm);
   var aT = Wmm / 2, bT = Hmm / 2, nT = 10;
+  function rAt(arr, zq) {                                   // monotone-z region sampler
+    if (zq <= arr[0].z) return arr[0].r;
+    for (var q = 1; q < arr.length; q++) {
+      if (arr[q].z < arr[q - 1].z) break;                   // rollback region: stop
+      if (arr[q].z >= zq) {
+        var f = (zq - arr[q - 1].z) / (arr[q].z - arr[q - 1].z || 1e-12);
+        return arr[q - 1].r + f * (arr[q].r - arr[q - 1].r);
+      }
+    }
+    return arr[arr.length - 1].r;
+  }
+  function zWhere(arr, rq) {                                // first z with wall r >= rq (null if never)
+    for (var q = 1; q < arr.length; q++) {
+      if (arr[q].z < arr[q - 1].z) break;
+      if (arr[q].r >= rq) {
+        var f = (rq - arr[q - 1].r) / (arr[q].r - arr[q - 1].r || 1e-12);
+        return arr[q - 1].z + f * (arr[q].z - arr[q - 1].z);
+      }
+    }
+    return null;
+  }
+  var zSH = aT > Hp[0].r ? zWhere(Hp, aT) : null;
+  var zSV = bT > Vp[0].r ? zWhere(Vp, bT) : null;
+  var L = Lmm > 0 ? Lmm : 2 * Math.max(Wmm, Hmm);
+  if (zSH !== null) L = Math.max(L, 2.2 * zSH);             // monotone guarantee for the shift
+  if (zSV !== null) L = Math.max(L, 2.2 * zSV);
+  var sH = aT / Hp[0].r, sV = bT / Vp[0].r;
   var H2 = new Array(Hp.length), V2 = new Array(Vp.length), seN = new Array(Hp.length);
   for (var i = 0; i < Hp.length; i++) {
     var t = Math.max(0, Math.min(1, Hp[i].z / L));
-    var e = t * t * (3 - 2 * t);
+    var e = t * t * t * (t * (t * 6 - 15) + 10);            // smootherstep
     if (i < B) {
-      H2[i] = { z: Hp[i].z, r: aT + (Hp[i].r - aT) * e };
-      V2[i] = { z: Vp[i].z, r: bT + (Vp[i].r - bT) * e };
+      H2[i] = { z: Hp[i].z, r: zSH !== null ? rAt(Hp, Hp[i].z + zSH * (1 - e)) : Hp[i].r * (sH + (1 - sH) * e) };
+      V2[i] = { z: Vp[i].z, r: zSV !== null ? rAt(Vp, Vp[i].z + zSV * (1 - e)) : Vp[i].r * (sV + (1 - sV) * e) };
     } else { H2[i] = Hp[i]; V2[i] = Vp[i]; }
     seN[i] = nT + (2 - nT) * e;
   }
-  // entry 101: monotone guard through the transition -- when the family wall runs
-  // wider than the rect (aT < wall), no station may dip below the running max
-  // (a waist at the throat reads as an error next to commercial drawings).
+  // entry 101 monotone guard, kept as belt-and-braces (both strategies are
+  // monotone by construction; the clamp should never fire).
   for (var i2 = 1; i2 < Hp.length && Hp[i2].z < L; i2++) {
-    if (H2[i2].r < H2[i2 - 1].r && Hp[i2].r >= aT) H2[i2] = { z: H2[i2].z, r: H2[i2 - 1].r };
-    if (V2[i2].r < V2[i2 - 1].r && Vp[i2].r >= bT) V2[i2] = { z: V2[i2].z, r: V2[i2 - 1].r };
+    if (H2[i2].r < H2[i2 - 1].r) H2[i2] = { z: H2[i2].z, r: H2[i2 - 1].r };
+    if (V2[i2].r < V2[i2 - 1].r) V2[i2] = { z: V2[i2].z, r: V2[i2 - 1].r };
   }
   return Object.assign({}, prof, { H: H2, V: V2, shape: "sellipse:2", seNArr: seN, ribbon: { w: Wmm, h: Hmm, L: L } });
 }
@@ -6024,7 +6065,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     { key: "f0V", label: "V intercept f\u2080V (0 = auto)", unit: "Hz", min: 0, max: 4000, step: 25, sect: "core", fams: { cd: 1 } },
     { key: "osK", label: "k \u2014 throat expansion", unit: "", min: 0.5, max: 4, step: 0.05, sect: "core", fams: { os: 1 } },
     { key: "osS", label: "s \u2014 termination flare", unit: "", min: 0, max: 2, step: 0.05, sect: "core", fams: { os: 1 } },
-    { key: "osN", label: "n \u2014 termination exponent", unit: "", min: 2, max: 8, step: 0.25, sect: "core", fams: { os: 1 } },
+    { key: "osN", label: "n \u2014 termination exponent", unit: "", min: 2, max: 12, step: 0.25, sect: "core", fams: { os: 1 } }   /* entry 229 (Hans: "set the N Termination Exponent to a max. of at least 10"): 12, verified finite across the fc/covH ranges */,
     { key: "seN", label: "Lam\u00e9 exponent n", unit: "", min: 2, max: 8, step: 0.1, sect: "geo" },
     { key: "TaddV", label: "V-plane: T add (HVDiff)", unit: "", min: 0, max: 5, step: 0.05, sect: "petf", fams: { jmlc: 1, swh: 1, hypex: 1 } },
     { key: "fmultV", label: "V-plane: f mult (HVDiff)", unit: "\u00d7", min: 0.25, max: 6, step: 0.25, sect: "petf", fams: { jmlc: 1, swh: 1, hypex: 1 } },
@@ -6149,7 +6190,17 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       if (!_bw || !_di || !lastAct || !lastProf) return;
       var _mW = 2 * lastProf.H[lastProf.H.length - 1].r, _mH = 2 * lastProf.V[lastProf.V.length - 1].r;
       var _pH = null, _pV = null;
-      if (S.family === "cd" || S.family === "os" || S.family === "osc" || S.family === "rosse" || S.family === "biradial") { _pH = S.covH || null; _pV = S.covV || null; }
+      if (S.family === "cd" || S.family === "osc" || S.family === "biradial") { _pH = S.covH || null; _pV = S.covV || null; }
+      // entry 229 (Hans: symmetric OS-SE/R-OSSE showed DIFFERENT H and V beamwidth
+      // estimates): the old branch fed os/rosse from S.covV -- a dial NEITHER family
+      // owns, i.e. stale state from whichever family last set it. os owns covH only;
+      // rosse's design angle is the rosA dial (HALF-angle -> x2). V plateau = the H
+      // plateau narrowed by the aspect stretch (atan of the scaled tangent); at
+      // aspect 1 the planes are IDENTICAL by construction.
+      if (S.family === "os" || S.family === "rosse") {
+        _pH = S.family === "os" ? (S.covH || null) : (S.rosA ? 2 * S.rosA : null);
+        _pV = _pH && S.aspect > 1 ? 2 * Math.atan(Math.tan((_pH / 2) * Math.PI / 180) / S.aspect) * 180 / Math.PI : _pH;
+      }
       if (S.family === "wn" && lastAct.wn) {
         var _p9 = lastAct.wn.prof, _i9 = Math.round(0.62 * (_p9.a.length - 1));
         _pH = 2 * Math.atan2(_p9.a[_i9 + 4] - _p9.a[_i9 - 4], _p9.zOuter[_i9 + 4] - _p9.zOuter[_i9 - 4]) * 180 / Math.PI;
@@ -6269,7 +6320,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       '<main>' +
       '<div style="padding:12px 16px;border-bottom:1px solid var(--line)"><div class="eyebrow" style="margin-bottom:6px">3-D PREVIEW \u2014 DRAG ROTATE \u00b7 WHEEL ZOOM <button class="btn" id="showConstr" style="display:none;width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">SHOW CONSTRUCTION</button><button class="btn" id="dirOvBtn" style="width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">DIRECTIVITY: OFF</button><button class="btn" id="bemPrevBtn" style="width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">BEM MESH: OFF</button></div>' +
       '<div id="view3d" style="width:100%;height:380px;background:#FFFFFF;touch-action:none;cursor:grab"></div>' +
-      '<span id="buildstamp" style="font-family:var(--mono);font-size:9px;color:var(--faint);letter-spacing:0.08em">build 228 · 2026-07-29</span><div id="v3dnote" style="font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:6px;letter-spacing:.04em"></div></div>' +
+      '<span id="buildstamp" style="font-family:var(--mono);font-size:9px;color:var(--faint);letter-spacing:0.08em">build 229 · 2026-07-29</span><div id="v3dnote" style="font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:6px;letter-spacing:.04em"></div></div>' +
       '<div id="drawing" style="padding:10px 12px 0"></div>' +
       '<div class="legend" id="legend"></div><div class="stats" id="stats"></div>' +
       '<div style="padding:14px 16px 0 16px"><div class="eyebrow">REPORTS \u2014 1-D / GEOMETRIC ESTIMATES (NOT A BEM SUBSTITUTE)</div></div>' +
@@ -7075,6 +7126,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
         t += '<br>Section morphs round throat \u2192 superellipse / WN rounded-rectangle / ellipse; Lam\u00e9 exponent blends 2 \u2192 seN along the run; corner radius sweeps throat R \u2192 mouth corner R; station area preserved exactly. Per-plane tangent end flares \u00e0 la WN termination.';
       if (S.petf) t += '<br>PETF: T(s) = T\u2080 + T_add\u00b7(1\u2212e^(\u2212m\u00b7f_mult\u00b7(s\u2212ref))); differing V-plane params = per-azimuth HVDiff loft (BEM recipes No.1 waisted / No.2 oval). Costs ~1 octave of loading for the directivity gained.';
       t += '<br>1-D Webster loading estimate: staircase chain into a baffled-piston mouth load. It does NOT predict 3-D directivity, transverse modes, diffraction, fin interaction, or non-planar wavefront behavior \u2014 BEM (AKABAK) is the arbiter. Coordinate: axial z for plane-wave analytic profiles; the true wavefront coordinate for JMLC; the per-cell law radius for the Yuichi family; axial z labeled as an APPROXIMATION for reconstructed non-axisymmetric horns.';
+      t += '<br>Beamwidth / DI est.: \u22126 dB width per plane from the Keele mouth-size relation (\u03b8\u00b7d\u00b7f = 25.4\u00d710\u2076) run in reverse, clamped to the design coverage plateau where one exists; DI from the rectangular-coverage approximation Q = 180\u00b2/(\u03b8H\u00b7\u03b8V). The plateau equals the NOMINAL angle by the CD convention (coverage \u2261 \u22126 dB beamwidth at the design angle) \u2014 real waveguides\u2019 polars are round-topped, so measured \u22126 dB widths typically sit somewhat inside nominal with correspondingly higher DI than the rectangular formula returns. Treat the plateau as the design target, not a prediction \u2014 BEM arbitrates.';
       t += '<br>Max SPL (air K2): the horn\u2019s physical limit from finite-amplitude propagation in air \u2014 the plane-wave second-harmonic law (Thuras/Jenkins/O\u2019Neil 1935) integrated over the station areas with 1-D transfer weights (method after Makarski 2006, who verified the BEM-grade version within 3\u20134 dB of measurement; second harmonic dominates air distortion). Assumes an IDEAL driver (a quality 1.4\u2033 driver costs \u2248 3 dB at HF), Q from the geometric beamwidth estimate, distortion accumulated to 4 m and referred to 1 m; valid above fc where horn transport is resistive. Small geometry changes can shift this curve 1\u20133 dB \u2014 compare candidate designs with it, then let BEM arbitrate.';
       t += (S.family === 'biradial')
         ? ' Exports: STL/OBJ carry the true arc-mouth fan loft (open surface when Shell: none); CSV H/V profiles are planar (wing region approximated).'
