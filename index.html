@@ -6246,7 +6246,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       '<main>' +
       '<div style="padding:12px 16px;border-bottom:1px solid var(--line)"><div class="eyebrow" style="margin-bottom:6px">3-D PREVIEW \u2014 DRAG ROTATE \u00b7 WHEEL ZOOM <button class="btn" id="showConstr" style="display:none;width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">SHOW CONSTRUCTION</button><button class="btn" id="dirOvBtn" style="width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">DIRECTIVITY: OFF</button><button class="btn" id="bemPrevBtn" style="width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">BEM MESH: OFF</button></div>' +
       '<div id="view3d" style="width:100%;height:380px;background:#FFFFFF;touch-action:none;cursor:grab"></div>' +
-      '<span id="buildstamp" style="font-family:var(--mono);font-size:9px;color:var(--faint);letter-spacing:0.08em">build 226 · 2026-07-23</span><div id="v3dnote" style="font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:6px;letter-spacing:.04em"></div></div>' +
+      '<span id="buildstamp" style="font-family:var(--mono);font-size:9px;color:var(--faint);letter-spacing:0.08em">build 227 · 2026-07-29</span><div id="v3dnote" style="font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:6px;letter-spacing:.04em"></div></div>' +
       '<div id="drawing" style="padding:10px 12px 0"></div>' +
       '<div class="legend" id="legend"></div><div class="stats" id="stats"></div>' +
       '<div style="padding:14px 16px 0 16px"><div class="eyebrow">REPORTS \u2014 1-D / GEOMETRIC ESTIMATES (NOT A BEM SUBSTITUTE)</div></div>' +
@@ -6792,10 +6792,15 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
   var pending = false;
   function scheduleUpdate() { if (pending) return; pending = true; setTimeout(function () { pending = false; update(); }, 90); }
 
-  var SECTION_ALLOWED = { os: ["ellipse"], osc: ["ellipse"], cd: ["rrect", "ellipse"] }; // OS: derivation is axisymmetric (ellipse = per-axis form); cd: the Keele recipe defines rect + round only; biradial: section is intrinsic (select hidden)
+  var SECTION_ALLOWED = { os: ["ellipse"], osc: ["ellipse"], cd: ["rrect", "ellipse"], jmlcell: ["ellipse"] }; // OS: derivation is axisymmetric (ellipse = per-axis form); cd: the Keele recipe defines rect + round only; biradial: section is intrinsic (select hidden); jmlcell (entry 227, user report "rounded rectangle doesnt always work on every family"): the quasi-elliptical MORPH IS the section law -- the profile path hardcodes ellipse (entry 90), so offering rrect/sellipse drew a section overlay the solid never had (STL byte-identical, verified live). Want a rounded-rect JMLC? That is jmlc + rrect, which works.
     function sectionOptionsFor(fam) { return (fam === "biradial" || fam === "wn" || fam === "iwata") ? null : (SECTION_ALLOWED[fam] || ["ellipse", "sellipse", "rrect"]); }   // iwata: sections are the decoded grid
     function applicability() {
       var _sopt = sectionOptionsFor(S.family);
+      // entry 227 (same user report, second case verified live: jmlc + Wide-format
+      // preset + rrect -> STL byte-identical): under the az-loft the 13-azimuth
+      // PETF profiles ARE the shaping (the same rule that hides aspect/cornerR/seN
+      // below) -- the section morph never runs, so only ellipse is offered.
+      if (_sopt && S.petf && PETF_FAMILIES[S.family] && (S.TaddV !== S.Tadd || S.fmultV !== S.fmult)) _sopt = ["ellipse"];
       // entry 101 (the user's GENERAL RULE: anything not used in a family is hidden):
       // the throat shape selector does nothing for rings families (WN slot, Arai
       // rect adapter, Iwata grid) -- hide it there.
@@ -7029,6 +7034,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     function methodBlurb() {
       var F = {
         iwata: 'Iwata (JMLC 2007, decoded from his calcul_3D sheets): a FIXED-PROPORTION design \u2014 the whole geometry follows fc, so the throat is not a free dial. The drawn entry is a long, slowly-expanding generative neck that the real horns saw off at the driver exit: set \u201cDriver exit \u00d8 cut\u201d to your driver (50.8 = 2\u2033, the Iwata-300 lineage; 35.56 = 1.4\u2033; 0 = full neck). The cut snaps to a decoded grid row and the stats report the true elliptical rim \u2014 the Iwata expands H-first, so a \u00d852 area-equivalent cut is a 67.7\u00d733.3 mm rim, not a circle.',
+        jmlcell: 'JMLC quasi-elliptical (Le Cl\u00e9ac\u2019h 2007): the isophase construction with a progressive elliptical flattening of the wavefronts along the path (aplat = mouth a/b, \u00b5/\u03c3 place the flattening). The MORPH IS the cross-section \u2014 H and V walls come from the elliptical wavefront law, so the section selector offers only ellipse (a rounded-rect JMLC is the jmlc family + rrect section).',
         jmlc: 'JMLC isophase (Le Cl\u00e9ac\u2019h method): the mouth roundover IS the construction \u2014 WRAP extends the native roll past the truncation (no invented arc; R hidden as N/A). Polyline wavefront advanced along wall normals; the outer element solves the hyp-ex area law S(s) = S\u2080\u00b7(cosh(m/2\u00b7s) + T(s)\u00b7sinh(m/2\u00b7s))\u00b2, m = 4\u03c0fc/c, outer element \u27c2 wall. Entry angle > 0 seeds a driver-matched conical mid element; 0 is canonical (the opening angle is intrinsic to fc/T).',
         swh: 'Kugelwellen / SWH (Klangfilm\u2013R\u00f6sch): spherical-cap wavefronts of constant radius r\u2080 = c/(\u03c0\u00b7fc); h = h\u2080\u00b7g\u00b2, y\u00b2 = h(2r\u2080\u2212h); mouth at the vertical tangent h = 1/m. Aspect > 1 switches to ellipsoidal wavefronts (triaxial stretch, exact cap-area law); the SP toggle applies the stereographic-projection point map (saddle mouth, minor axis forward).',
         tractrix: 'Tractrix (Neile 1657 curve): constant tangent length r\u2080 = c/(2\u03c0\u00b7fc) to the axis; closed-form x(y) marched from the throat toward the asymptotic mouth radius r\u2080.',
