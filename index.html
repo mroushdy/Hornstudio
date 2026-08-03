@@ -5590,7 +5590,48 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
   return out;
 }
 
-  
+/* entry 231 (user: "you need to show the number as the adjustments change").
+   R-OSSE, OS-SE and classic OS have NO fc dial -- their published formulae carry
+   no cut-off term (see entry 231 notes), so the only thing that sets the
+   low-frequency end is MOUTH SIZE. Until now that was inferable only by reading
+   the mouth diameter off the stats panel and doing the arithmetic by hand.
+
+   mouthCorner returns the corner as a DERIVED number, from the ACTUAL last
+   station of the ACTUAL profile the charts use (entry 215, one geometry source)
+   -- never from a nominal dial, and never from a mouth "diameter" that would be
+   wrong the moment the section is elliptical or rounded-rectangular. The
+   equivalent radius is taken from AREA, which is the only mouth measure that
+   generalizes across round / ellipse / superellipse / rrect.
+
+   kr1  = frequency where the mouth circumference equals one wavelength
+          (k*rEq = 1). Below it the mouth is acoustically small and pattern
+          control falls away -- it is a mouth-size limit, NOT a horn cut-off:
+          for the waveguide families there is no cut-off to report.
+   xoverMin = 2 * kr1, i.e. one octave above the corner. This is the standard
+          working rule of thumb, reported as ADVISORY -- it is not a measurement
+          and the header/label must say so wherever it is shown.
+
+   Pass areaOverride when the caller holds a truer mouth area than the planar
+   last station does (wn's curved-wavefront mouth, biradial's arc mouth). */
+function mouthCorner(prof, areaOverride) {
+  if (!prof || !prof.H || !prof.V || prof.H.length < 2 || prof.V.length < 2) return null;
+  var iL = prof.H.length - 1, jL = prof.V.length - 1;
+  var shp = prof.shape || "ellipse", rA = prof.rhoArr, sA = prof.seNArr;
+  var S9;
+  if (areaOverride !== undefined && areaOverride !== null && areaOverride > 0) S9 = areaOverride;
+  else S9 = sectionArea(sA ? "sellipse:" + sA[Math.min(iL, sA.length - 1)] : shp,
+    prof.H[iL].r, prof.V[jL].r, rA ? rA[Math.min(iL, rA.length - 1)] : (prof.rho || 0));
+  if (!(S9 > 0) || !isFinite(S9)) return null;
+  var rEq = Math.sqrt(S9 / Math.PI);
+  return {
+    area: S9, rEq: rEq, dEq: 2 * rEq,
+    kr1: C / (2 * Math.PI * rEq),
+    xoverMin: C / (Math.PI * rEq),
+    overridden: !!(areaOverride !== undefined && areaOverride !== null && areaOverride > 0)
+  };
+}
+
+
 
   /* ================= state ================= */
   var S = {
@@ -6509,7 +6550,7 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
       '<main>' +
       '<div style="padding:12px 16px;border-bottom:1px solid var(--line)"><div class="eyebrow" style="margin-bottom:6px">3-D PREVIEW \u2014 DRAG ROTATE \u00b7 WHEEL ZOOM <button class="btn" id="showConstr" style="display:none;width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">SHOW CONSTRUCTION</button><button class="btn" id="dirOvBtn" style="width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">DIRECTIVITY: OFF</button><button class="btn" id="bemPrevBtn" style="width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">BEM MESH: OFF</button></div>' +
       '<div id="view3d" style="width:100%;height:380px;background:#FFFFFF;touch-action:none;cursor:grab"></div>' +
-      '<span id="buildstamp" style="font-family:var(--mono);font-size:9px;color:var(--faint);letter-spacing:0.08em">build 230 · 2026-08-03</span><div id="v3dnote" style="font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:6px;letter-spacing:.04em"></div></div>' +
+      '<span id="buildstamp" style="font-family:var(--mono);font-size:9px;color:var(--faint);letter-spacing:0.08em">build 231 · 2026-08-03</span><div id="v3dnote" style="font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:6px;letter-spacing:.04em"></div></div>' +
       '<div id="drawing" style="padding:10px 12px 0"></div>' +
       '<div class="legend" id="legend"></div><div class="stats" id="stats"></div>' +
       '<div style="padding:14px 16px 0 16px"><div class="eyebrow">REPORTS \u2014 1-D / GEOMETRIC ESTIMATES (NOT A BEM SUBSTITUTE)</div></div>' +
@@ -7356,6 +7397,26 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     st += isRound() ? statHTML("Mouth \u00d8", fmt(lastH.r * 2) + " mm")
                     : statHTML("Mouth W \u00d7 H", fmt(lastH.r * 2) + " \u00d7 " + fmt(lastV.r * 2) + " mm");
     st += statHTML("Depth (max z)", fmt(lastAct.axialDepth !== undefined ? lastAct.axialDepth : lastAct.sEnd) + " mm");
+    /* entry 231 (user: "you need to show the number as the adjustments change").
+       The mouth-size corner, live, for EVERY family -- previously it existed only
+       for cd-rrect and biradial, so on R-OSSE / OS-SE / classic OS (which have no
+       fc dial at all, their published formulae carrying no cut-off term) the user
+       had to read the mouth diameter and do the arithmetic by hand to find out what
+       the horn's low end actually was. Derived from the ACTUAL last station of the
+       ACTUAL profile via mouthCorner (entry 215, one geometry source), by AREA, so
+       it stays true when the section is elliptical or rounded-rectangular. It is a
+       mouth-size limit, not a cut-off, and the crossover figure is labelled ADVISORY
+       because it is a rule of thumb (one octave up), not a measurement. */
+    var _mcOv = (S.family === "wn" && lastAct.wn && lastAct.wn.prof) ? lastAct.wn.prof.mouthAreaCurved : undefined;
+    var _mc = mouthCorner(actProf, _mcOv);
+    if (_mc) st += statHTML("Mouth corner kr=1 (derived)",
+      Math.round(_mc.kr1) + " Hz · Dₑq " + fmt(_mc.dEq) + " mm · S " + fmt(_mc.area / 100) + " cm²"
+      + (_mc.overridden ? " (curved wavefront)" : "")
+      + " — pattern control falls away below this; ADVISORY: cross no lower than ≈ "
+      + Math.round(_mc.xoverMin) + " Hz (one octave up)"
+      + ((S.family === "rosse" || S.family === "os" || S.family === "osc")
+         ? " · this family has NO fc dial — " + (S.family === "rosse" ? "R (outer radius)" : "coverage + throat") + " is the low-frequency handle"
+         : ""));
     // ROUNDOVER-INERT VISIBILITY (2026-07-13, user report: sliders felt dead): families whose
     // wall terminates already rolled (jmlc/swh at high truncation) leave no sweep for the
     // mouth roundover -- 90 + wrap must EXCEED the wall exit angle to add anything. Say so.
@@ -7425,8 +7486,9 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
     st += statHTML("End", lastAct.terminated);
     if ((S.family === "cd" && S.section === "rrect") || S.family === "biradial") {
       st += statHTML("Implied f\u2081H / f\u2081V", (2.54e7 / (S.covH * 2 * lastH.r)).toFixed(0) + " / " + (2.54e7 / (S.covV * 2 * lastV.r)).toFixed(0) + " Hz");
-      var SmA = sectionArea("rrect", lastH.r, lastV.r, Math.min(S.cornerR, Math.min(lastH.r, lastV.r)));
-      st += statHTML("Mouth kr=1 @", (344000 / (2 * Math.sqrt(Math.PI * SmA))).toFixed(0) + " Hz"); // loading advisory (mouth is Keele-sized, not fc-sized)
+      // entry 231: the cd/biradial-only kr=1 line is GONE -- superseded by the
+      // universal "Mouth corner kr=1 (derived)" stat above, which computes the same
+      // number from the profile's own section law instead of assuming "rrect".
     }
     if (S.family === "biradial" && lastAct && lastAct.gapW) st += statHTML("Slot (gap)", fmt(lastAct.gapW) + " mm @ z=" + fmt(lastAct.xGap));
     if (S.family === "biradial") {
