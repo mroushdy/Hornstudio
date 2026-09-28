@@ -253,7 +253,7 @@ function jmlcWall(P) {
       wavefronts.push(wf9);
     }
   }
-  return { wall: wall, sEnd: s, terminated: terminated, Ttrace: Ttrace, wavefronts: wavefronts, S0: S0, m: m, diagnostics: diagnostics, entryDominatedLen: entryDominatedLen };
+  return { wall: wall, sEnd: s, terminated: terminated, Ttrace: Ttrace, wavefronts: wavefronts, S0: S0, m: m, diagnostics: diagnostics, entryDominatedLen: entryDominatedLen, th0Deg: th0 * 180 / Math.PI, th0Natural: !!P.entryAuto };   /* entry 238: the launch angle, reported */
 }
 
 function swhWall(P) { // Kugelwellen: spherical caps of constant radius r0 = c/(pi*fc) (Kolbrek eq.18; NOT c/2pi -- see regression 1)
@@ -279,7 +279,7 @@ function swhWall(P) { // Kugelwellen: spherical caps of constant radius r0 = c/(
   return { wall: wall, sEnd: x, terminated: terminated, Ttrace: Ttrace, S0: 2 * Math.PI * R0 * h0, m: m, R0: R0 };
 }
 
-function tractrixWall(P) { // classic tractrix (P.G.A.H. Voigt, 1927); notation follows the sphericalhorns.net exposition (eqs 3-4 there) -- see PROVENANCE.md
+function tractrixWall(P) { // classic tractrix (P.G.A.H. Voigt, 1927); notation follows the sphericalhorns.net exposition (eqs 3-4 there) -- see README.md (provenance)
   var rt = P.rt, r0 = C / (2 * Math.PI * P.fc);
   if (rt >= r0 * 0.98) return { wall: [{ z: 0, r: rt }], sEnd: 0, terminated: "throat>=r0", Ttrace: [] };
   function xOf(y) { return r0 * Math.log((r0 + Math.sqrt(r0 * r0 - y * y)) / y) - Math.sqrt(r0 * r0 - y * y); }
@@ -297,7 +297,7 @@ function tractrixWall(P) { // classic tractrix (P.G.A.H. Voigt, 1927); notation 
   return { wall: wall, sEnd: wall[wall.length - 1].z, terminated: terminated, Ttrace: [], r0: r0 };
 }
 
-function hypexWall(P) { // plane-wavefront hypex (V. Salmon, JASA 1946); PETF from the equations published by Dr. B. Ahlswede, sphericalhorns.net (eqs 1-2 of that presentation) -- see PROVENANCE.md
+function hypexWall(P) { // plane-wavefront hypex (V. Salmon, JASA 1946); PETF from the equations published by Dr. B. Ahlswede, sphericalhorns.net (eqs 1-2 of that presentation) -- see README.md (provenance)
   var m = 4 * Math.PI * P.fc / C, rt = P.rt, Tf = makeTfun(P, m);
   var rMouth = C / (2 * Math.PI * P.fc); // km*r = 1 criterion
   var dx = 0.5, x = 0, wall = [{ z: 0, r: rt }], Ttrace = [{ s: 0, T: Tf(0) }], terminated = "mouth-kr1";
@@ -342,13 +342,32 @@ function osseWall(P) {
   // r(z) = sqrt(k^2 r0^2 + 2 k r0 z tan(a0) + z^2 tan^2(a)) + r0(1-k) + (sL/q)[1-(1-(qz/L)^n)^(1/n)]
   // Generalizes Geddes/Freehafer OS with throat angle a0, expansion factor k,
   // and an infinitely-differentiable superellipse termination (clothoid-equivalent).
+  // entry 235 (kodomo, forum #54: SA8535 ribbon 48.6 x 166 mm with 70 H x 45 V on
+  // OSSE/R-OSSE "develops a long near-parallel section along the tall dimension,
+  // followed by a rather abrupt flare ... like a pedestal"; exprymer #55: "more ATH
+  // options"). ROOT CAUSE, measured: the V plane was the H curve stretched by
+  // "aspect", launched from the area-equivalent round throat (r 25), and the
+  // ribbon morph then had to Z-SHIFT that wall to reach the 83 mm half-height --
+  // r(z) = wall(z + zS(1-e)) squeezes the slope to ~15% of native mid-blend, then
+  // catches up: exactly the pedestal. PER-PLANE CONSTRUCTION now (the ATH form
+  // of the same published formula): each principal plane runs formula (5) with
+  // ITS OWN throat half-aperture (a0 = W/2, b0 = H/2 for a rect throat; rt for a
+  // round one) and ITS OWN coverage half-angle (covH / covV); a0, k, s, n, q are
+  // shared. One common length L, solved so BOTH planes reach their Keele size
+  // for f0 (the larger of the two per-plane lengths -- the dial promises pattern
+  // control to f0, in both planes). The flare therefore starts at the ribbon
+  // aperture immediately, in both planes. The section between the planes is the
+  // app's superellipse loft (rect-ish at the throat easing to the body shape).
   var covH = P.covH || 90, f0 = P.f0 || 800;
-  var r0 = P.rt, al = Math.min(70, Math.max(15, covH / 2)) * Math.PI / 180;
+  var covV = P.covV || covH;
+  var r0H = P.rtH || P.rt, r0V = P.rtV || P.rt;
+  var alH = Math.min(70, Math.max(15, covH / 2)) * Math.PI / 180;
+  var alV = Math.min(70, Math.max(15, covV / 2)) * Math.PI / 180;
   var a0 = Math.max(0, Math.min(25, P.entryDeg || 0)) * Math.PI / 180;
   var k = Math.max(0.3, Math.min(4, P.osK || 1));
   var s = Math.max(0, Math.min(2.5, P.osS === undefined ? 0.7 : P.osS));
   var nn = Math.max(2, Math.min(12, P.osN || 4)), q = 0.995;   // entry 229: ceiling 8 -> 12 (Hans wants >= 10)
-  var ta = Math.tan(al), ta0 = Math.tan(a0);
+  var ta0 = Math.tan(a0);
   // entry 219 (forum: the generic straight graft rippled OS-SE -- 2 slope
   // reversals, peak 52.8 vs 46.7 clean; the doomed-asymptote catch-up of
   // entry 184). Batik's formula 5 LAUNCHES at a0 natively, so the driver
@@ -359,24 +378,36 @@ function osseWall(P) {
   // THE DRIVER, exactly as entry 190 settled for the classic OS. v2 removes
   // the run: geometry is the pure curve from z=0; Driver entry L feeds the
   // Webster LOADING estimate only (the entry-192 treatment, extended here).
-  var dKeele = 2.54e7 / (Math.max(30, covH) * f0);
-  function rAt(z, L) {
+  function rAt(z, L, r0, ta) {
     var gos = Math.sqrt(k * k * r0 * r0 + 2 * k * r0 * z * ta0 + z * z * ta * ta) + r0 * (1 - k);
     var u = Math.min(1, (q * z) / L);
     return gos + (s * L / q) * (1 - Math.pow(1 - Math.pow(u, nn), 1 / nn));
   }
-  // solve L so the mouth reaches the Keele width for the design coverage
-  var lo = r0, hi = 20 * dKeele, L = 0;
-  for (var it = 0; it < 80; it++) {
-    L = (lo + hi) / 2;
-    if (rAt(L, L) < dKeele / 2) lo = L; else hi = L;
+  // solve L so the mouth reaches the Keele size for the plane's coverage
+  function solveL(r0, ta, cov) {
+    var dK = 2.54e7 / (Math.max(30, cov) * f0), lo = r0, hi = 20 * dK, L = 0;
+    for (var it = 0; it < 80; it++) {
+      L = (lo + hi) / 2;
+      if (rAt(L, L, r0, ta) < dK / 2) lo = L; else hi = L;
+    }
+    return L;
   }
-  var wall = [], n2 = 600;
+  var LH = solveL(r0H, Math.tan(alH), covH), LV = solveL(r0V, Math.tan(alV), covV);
+  var asym = Math.abs(covV - covH) > 0.01 || Math.abs(r0V - r0H) > 1e-9;
+  var L = asym ? Math.max(LH, LV) : LH;
+  var wall = [], wallV = [], n2 = 600;
   for (var i = 0; i < n2; i++) {
     var z = L * i / (n2 - 1);
-    wall.push({ z: z, r: rAt(z, L) });
+    wall.push({ z: z, r: rAt(z, L, r0H, Math.tan(alH)) });
+    if (asym) wallV.push({ z: z, r: rAt(z, L, r0V, Math.tan(alV)) });
   }
-  return { wall: wall, sEnd: L, terminated: "OSSE (Keele-width mouth)", Ttrace: [] };
+  var out = { wall: wall, sEnd: L, terminated: "OSSE (Keele-width mouth)", Ttrace: [],
+              osPlanes: { LH: LH, LV: LV, covH: covH, covV: covV, r0H: r0H, r0V: r0V,
+                          mouthW: 2 * wall[n2 - 1].r, mouthH: 2 * (asym ? wallV[n2 - 1].r : wall[n2 - 1].r) } };
+  out.osPlanes.f0H = 2.54e7 / (Math.max(30, covH) * out.osPlanes.mouthW);   // pattern-control corner ACHIEVED per plane (Keele)
+  out.osPlanes.f0V = 2.54e7 / (Math.max(30, covV) * out.osPlanes.mouthH);
+  if (asym) out.wallV = wallV;
+  return out;
 }
 
 function cdWallRound(P) {
@@ -950,6 +981,11 @@ function wnProfile(P) {
   var n = P.stations || 160, i;
   var lambda = 344000 / P.fc, mu = 2 * P.rt / lambda;
   var extrap = mu < MU0 - 1e-7 || mu > 0.0443023256 + 1e-7;
+  // entry 234: the mu-linear zm law crosses ZERO at mu ~ 0.215 (negative mouth depth
+  // -> NaN rings). Engine-level floor so no caller can get a non-finite family;
+  // the app clamps the throat dial at the same 0.20 (validateInputs, synced + told).
+  var muClamped = mu > 0.2;
+  if (muClamped) mu = 0.2;
   var th0 = law(0.066385, -0.7663, mu);
   var Kl  = law(0.851509, 16.5414, mu);
   var thm = law(1.336354, 2.8880, mu);
@@ -1335,7 +1371,7 @@ function wnProfile(P) {
   // is fine in the loading zone (0.7-3% there) but understates the mouth by ~13%.
   var mouthAreaCurved = null;
   return { u: u, s: sArr, zOuter: z, a: a, b: b, rc: rc, tgtArea: tgtArea, actArea: actArea, bRel: bRelOut9, sRel: sRelOut9, covHEff: covHEff9,
-           lambda: lambda, mu: mu, w: (mu - MU0) / (0.0443023256 - MU0), extrapolation: extrap, L: L, joinResiduals: jr9 };
+           lambda: lambda, mu: mu, w: (mu - MU0) / (0.0443023256 - MU0), extrapolation: extrap, muClamped: muClamped, L: L, joinResiduals: jr9 };
 }
 function wnPathLen(sArr, zO, xO, q, c) {
   var len = 0, z0 = sArr[0] + c * (zO[0] - sArr[0]), x0 = q * xO[0];
@@ -1710,21 +1746,44 @@ function osWall(P) {
   var covH = P.covH || 90, f0 = P.f0 || 800;
   var covV = P.covV || covH;
   var rt = P.rt, th = Math.min(70, Math.max(15, covH / 2)) * Math.PI / 180;
+  var rtH = P.rtH || rt, rtV = P.rtV || rt;   // entry 235: per-plane throat half-apertures (rect throat), same law per plane
   var thV = Math.min(70, Math.max(15, covV / 2)) * Math.PI / 180;
   var tth = Math.tan(th), tthV = Math.tan(thV);
   var dKeele = 2.54e7 / (Math.max(30, covH) * f0);
   var wall = [], wallV = [], n = 700;
-  var zEnd = Math.sqrt(Math.max(1, (dKeele / 2) * (dKeele / 2) - rt * rt)) / tth;
+  var zEnd = Math.sqrt(Math.max(1, (dKeele / 2) * (dKeele / 2) - rtH * rtH)) / tth;
   for (var i = 0; i < n; i++) {
     var z = zEnd * i / (n - 1);
-    wall.push({ z: z, r: Math.sqrt(rt * rt + z * z * tth * tth) });
-    wallV.push({ z: z, r: Math.sqrt(rt * rt + z * z * tthV * tthV) });
+    wall.push({ z: z, r: Math.sqrt(rtH * rtH + z * z * tth * tth) });
+    wallV.push({ z: z, r: Math.sqrt(rtV * rtV + z * z * tthV * tthV) });
   }
   var out = { wall: wall, sEnd: zEnd, terminated: "keele-width", Ttrace: [] };
-  if (Math.abs(covV - covH) > 0.01) out.wallV = wallV;
+  if (Math.abs(covV - covH) > 0.01 || Math.abs(rtV - rtH) > 1e-9) out.wallV = wallV;
   return out;
 }
 
+function rosseCurve(r0, R, aDeg, a0, k, rr, bb, mm, qq, n) {
+  // entry 235: the published R-OSSE parametric curve for ONE plane (factored out
+  // of rosseWall so the H and V planes can each run it with their own r0, R, a).
+  var c1 = (k * r0) * (k * r0);
+  var c2 = 2 * k * r0 * Math.tan(a0);
+  var c3 = Math.pow(Math.tan(aDeg * Math.PI / 180), 2);
+  var disc = c2 * c2 - 4 * c3 * (c1 - Math.pow(R + r0 * (k - 1), 2));
+  if (disc <= 0 || R <= r0) return null;
+  var L = (Math.sqrt(disc) - c2) / (2 * c3);
+  var A1 = Math.sqrt(rr * rr + mm * mm);
+  var A2 = Math.sqrt(rr * rr + (1 - mm) * (1 - mm));
+  var wall = [], xMax = 0;
+  for (var i = 0; i < n; i++) {
+    var t = i / (n - 1);
+    var x = L * (A1 - Math.sqrt(rr * rr + (t - mm) * (t - mm))) - bb * L * (A1 - A2) * t * t;
+    var y = (1 - Math.pow(t, qq)) * (Math.sqrt(c1 + c2 * L * t + c3 * L * L * t * t) - r0 * (k - 1))
+          + Math.pow(t, qq) * (R + L * (1 - Math.sqrt(1 + c3 * (t - 1) * (t - 1))));
+    wall.push({ z: x, r: y });
+    if (x > xMax) xMax = x;
+  }
+  return { wall: wall, L: L, xMax: xMax };
+}
 function rosseWall(P) {
   // R-OSSE (Marcel Batik, at-horns.eu, Dec 2022) - exact published parametric formula.
   // Complete free-standing waveguide incl. rollback termination, BEM-validated by the author.
@@ -1732,7 +1791,7 @@ function rosseWall(P) {
   // a0 = 0 and b = 0 are VALID per the published formula (the paper analyzes a0 = 0 explicitly),
   // so use ===undefined defaults, not || (falsy-zero once made the UI show 0 while building 7.5).
   var R = P.rosR || 130, aDeg = P.rosA || 39, a0 = (P.rosA0 === undefined ? 7.5 : P.rosA0) * Math.PI / 180;
-  var k = P.rosK !== undefined ? P.rosK : 1.8, rr = P.rosRr !== undefined ? P.rosRr : 0.3, bb = P.rosB === undefined ? 0.3 : P.rosB, mm = P.rosM !== undefined ? P.rosM : 0.8, qq = P.rosQ !== undefined ? P.rosQ : 3.7; // AUDIT #14: zero is a valid published value; || silently replaced it
+  var k = P.rosK !== undefined ? P.rosK : 1.8, rr = P.rosRr !== undefined ? P.rosRr : 0.3, bb = P.rosB === undefined ? 0.3 : P.rosB, mm = P.rosM !== undefined ? P.rosM : 0.8, qq = P.rosQ !== undefined ? P.rosQ : 3.7; // AUDIT #14:
   // entry 221 (Hans, after 219: "the horn contour starts with linear
   // values"): the 219 prepend is REMOVED -- the driver's cone stays in the
   // driver (the entry-190 standard the classic OS already follows). The
@@ -1741,23 +1800,42 @@ function rosseWall(P) {
   // tan(a0)*sqrt(rr^2+m^2)/m, not tan(a0) -- the x-parameterization is not
   // unit-speed (dx/dt|0 = L*m/A1, dy/dt|0 = L*tan(a0)); measured 0.1506
   // first-chord vs 0.1406 raw tan on the ST260 defaults.
-  var c1 = (k * r0) * (k * r0);
-  var c2 = 2 * k * r0 * Math.tan(a0);
-  var c3 = Math.pow(Math.tan(aDeg * Math.PI / 180), 2);
-  var disc = c2 * c2 - 4 * c3 * (c1 - Math.pow(R + r0 * (k - 1), 2));
-  if (disc <= 0 || R <= r0) return { wall: [{ z: 0, r: r0 }], sEnd: 0, terminated: "invalid-params", Ttrace: [] };
-  var L = (Math.sqrt(disc) - c2) / (2 * c3);
-  var A1 = Math.sqrt(rr * rr + mm * mm);
-  var A2 = Math.sqrt(rr * rr + (1 - mm) * (1 - mm));
-  var wall = [], n = 500;
-  for (var i = 0; i < n; i++) {
-    var t = i / (n - 1);
-    var x = L * (A1 - Math.sqrt(rr * rr + (t - mm) * (t - mm))) - bb * L * (A1 - A2) * t * t;
-    var y = (1 - Math.pow(t, qq)) * (Math.sqrt(c1 + c2 * L * t + c3 * L * L * t * t) - r0 * (k - 1))
-          + Math.pow(t, qq) * (R + L * (1 - Math.sqrt(1 + c3 * (t - 1) * (t - 1))));
-    wall.push({ z: x, r: y });
+  // entry 235 (kodomo #54 / exprymer #55, the ATH form): PER-PLANE R-OSSE. The
+  // H plane runs the published curve with (r0H, R, a); the V plane with
+  // (r0V, R_V, a_V) -- a0, k, r, b, m, q shared. r0H/r0V come from a rect
+  // throat (W/2, H/2) or both equal rt. a_V = 0 means "same as H"; R_V = 0
+  // means SOLVED so the V plane's rollback reaches the SAME mouth depth as H
+  // (bisection on x_max, monotone in R) -- both curves stay the pure published
+  // formula and the mouth rim is planar. An explicit R_V keeps the curve pure
+  // too, and the rim is then non-planar by (x_max,V - x_max,H), reported.
+  // The two planes are paired by the parameter t (500 stations each); the
+  // ring builder blends z between planes with its cos^2 law.
+  var n = 500;
+  var r0H = P.rtH || r0, r0V = P.rtV || r0;
+  var aV = P.rosAV > 0 ? P.rosAV : aDeg;
+  var asym = Math.abs(aV - aDeg) > 1e-9 || Math.abs(r0V - r0H) > 1e-9 || (P.rosRV > 0 && Math.abs(P.rosRV - R) > 1e-9);
+  var cH = rosseCurve(r0H, R, aDeg, a0, k, rr, bb, mm, qq, n);
+  if (!cH) return { wall: [{ z: 0, r: r0H }], sEnd: 0, terminated: "invalid-params", Ttrace: [] };
+  var out = { wall: cH.wall, sEnd: cH.wall[n - 1].z, terminated: "t=1 (self-terminated)", Ttrace: [], rosL: cH.L };
+  if (asym) {
+    var RV = P.rosRV > 0 ? P.rosRV : 0, solvedRV = false, cV = null;
+    if (!(RV > 0)) {   // solve R_V for equal mouth depth
+      var lo = r0V + 0.5, hi = Math.max(4 * R, r0V + 1);
+      for (var it = 0; it < 60; it++) {
+        RV = 0.5 * (lo + hi);
+        var cT = rosseCurve(r0V, RV, aV, a0, k, rr, bb, mm, qq, 120);
+        if (!cT || cT.xMax < cH.xMax) lo = RV; else hi = RV;
+      }
+      RV = 0.5 * (lo + hi); solvedRV = true;
+    }
+    cV = rosseCurve(r0V, RV, aV, a0, k, rr, bb, mm, qq, n);
+    if (!cV) return { wall: [{ z: 0, r: r0H }], sEnd: 0, terminated: "invalid-params (V plane)", Ttrace: [] };
+    out.wallV = cV.wall;
+    out.rosPlanes = { R: R, RV: RV, solvedRV: solvedRV, a: aDeg, aV: aV, r0H: r0H, r0V: r0V,
+                      depthH: cH.xMax, depthV: cV.xMax, rimDz: cV.xMax - cH.xMax,
+                      mouthW: 2 * cH.wall[n - 1].r, mouthH: 2 * cV.wall[n - 1].r };
   }
-  return { wall: wall, sEnd: wall[wall.length - 1].z, terminated: "t=1 (self-terminated)", Ttrace: [] };
+  return out;
 }
 
 
@@ -1845,7 +1923,7 @@ function spTransform(rp) {
 }
 
 function buildHVDiff(PH, PV, cornerR) {
-  // HVDiff: per-plane PETF laws, implemented from Dr. B. Ahlswede\u2019s May 2021 publication on sphericalhorns.net (BEM-quantified there) -- see PROVENANCE.md.
+  // HVDiff: per-plane PETF laws, implemented from Dr. B. Ahlswede\u2019s May 2021 publication on sphericalhorns.net (BEM-quantified there) -- see README.md (provenance).
   // blended on the SAME physical axis: at each z, half-width a(z) from the H run,
   // half-height b(z) from the V run. Horn ends where the shorter plane's body ends.
   // Rollbacks dropped (per drba 2025: ~equivalent to a small roundover) -- use the
@@ -1879,7 +1957,7 @@ function buildHVDiff(PH, PV, cornerR) {
 }
 
 function buildHVDiffAz(PH, PV, nAz) {
-  // Wide-format HVDiff: construction rules inferred from the published No.1/No.2 profile plots (sphericalhorns.net) -- see PROVENANCE.md. Every azimuth phi gets its OWN complete PETF horn, with the
+  // Wide-format HVDiff: construction rules inferred from the published No.1/No.2 profile plots (sphericalhorns.net) -- see README.md (provenance). Every azimuth phi gets its OWN complete PETF horn, with the
   // PETF parameters blended between the horizontal (phi=0) and vertical (phi=90) recipes by
   // cos^2 weighting. The loft TERMINATES when the FASTEST azimuth completes its horn
   // (mouth + rollback); every slower azimuth is truncated at that same absolute arc length,
@@ -1989,15 +2067,44 @@ var IWATA_REF = { fc: 320, rt: 12.7, T0: 0.707107, norm: 346.5424935568508 };
 function iwataCutRow(exitD, sc) {
   if (!(exitD > 0)) return null;
   var G = IWATA_GRID, target = (exitD / 2) / sc;
+  // entry 233: the cut row is chosen by SECTION AREA (quarter-polygon shoelace x 4,
+  // in the grid's x/y), not by the mean of the 19 streamline radii -- the stats
+  // called the cut "area-equiv" while the code matched mean radius, which at the
+  // 2-inch cut (64 x 37 mm rim) gave 9% LESS area than the driver exit: the
+  // adapter would have contracted. meanR is now the true area-equivalent radius.
   for (var i = 0; i < G.length; i++) {
-    var s = 0;
-    for (var g = 0; g < 19; g++) s += Math.hypot(G[i][g][0], G[i][g][1]);
-    if (s / 19 >= target) {
+    var A = 0;
+    for (var g = 0; g < 18; g++) A += G[i][g][0] * G[i][g + 1][1] - G[i][g + 1][0] * G[i][g][1];
+    A = 2 * Math.abs(A);   // quarter polygon (axis-to-axis, the axis legs add nothing) x 4 / 2
+    var rEq = Math.sqrt(A / Math.PI);
+    if (rEq >= target) {
       if (i === 0) return null;   // the driver exit is smaller than the natural throat -- no cut
-      return { row: i, zRaw: G[i][18][2], meanR: s / 19 };
+      return { row: i, zRaw: G[i][18][2], meanR: rEq };
     }
   }
   return null;   // never reaches the exit diameter (huge exitD) -- no cut
+}
+// entry 233: the driver adapter loft used by iwataWall (meridians) and
+// buildIwataRings (every azimuth): cubic Hermite in r over a linear z ramp from
+// the round exit (r = exR, dr/dz = 0: the driver bore) to the streamline's cut
+// point (r0 at z0, slope = the streamline's own first-segment slope). NA = 14
+// stations. Returns the prepended array; the cut geometry is shifted by +adL.
+function iwataAdapterPts(z0, r0, slope0, exR, adL, NA) {
+  var out = [], zSpan = z0 + adL, m1 = slope0 * zSpan;
+  for (var a = 0; a < NA; a++) {
+    var u = a / NA, u2 = u * u, u3 = u2 * u;
+    var h00 = 2 * u3 - 3 * u2 + 1, h01 = -2 * u3 + 3 * u2, h11 = u3 - u2;
+    out.push({ z: u * zSpan, r: h00 * exR + h01 * r0 + h11 * m1 });
+  }
+  return out;
+}
+function iwataAdapterMeridian(W, exR, adL, fac) {
+  if (!W || W.length < 2 || !(adL > 0)) return W;
+  var dz = W[1].z - W[0].z, sl = Math.abs(dz) > 1e-9 ? (W[1].r - W[0].r) / dz : 0;
+  var out = iwataAdapterPts(W[0].z, W[0].r, sl, exR, adL, 14);
+  if (fac) for (var a = 0; a < out.length; a++) out[a].r *= fac[a];
+  for (var i = 0; i < W.length; i++) out.push({ z: W[i].z + adL, r: W[i].r });
+  return out;
 }
 function iwataWall(P) {
   // entry 102 (user report: "I do not see this narrowing throat in other iwata
@@ -2018,23 +2125,46 @@ function iwataWall(P) {
     V.push({ z: v9[2] * sc, r: v9[1] * sc });
   }
   var cut9 = iwataCutRow(P.iwExitD, sc), cutZ9 = 0, cutU9 = 0;
+  // entry 233 (flutter_happier, forum #47: "I had to fill the gap induced by the
+  // modified throat value (400 Hz fc and 2\" throat)"): the saw plane is NOT a
+  // round hole. At the 2" cut the Iwata section is already ~64 x 37 mm (H x V)
+  // and the streamlines cross the cut at different z (1.6 mm spread), so a
+  // round Ø50.8 driver exit sat inside the wall on the V axis and outside it
+  // on the H axis -- the gap he filled by hand. The fix is a DRIVER ADAPTER:
+  // a short loft from the round, planar driver exit (Ø = the requested exit,
+  // z = 0) to the actual cut section, C1 at both ends (tangent to the driver
+  // bore at z = 0, tangent to each streamline at the cut). Length = the
+  // Driver-entry dial when set, else 0.4 x cut diameter (min 10 mm). The cut
+  // section itself is untouched; the adapter is prepended, so the horn now
+  // starts at the driver face. Rings (buildIwataRings) and the H/V meridians
+  // read from them carry the same loft, so STL / STEP / BEM / drawing agree.
+  var adL9 = 0, exR9 = 0;
   if (cut9) {
     cutZ9 = cut9.zRaw * sc; cutU9 = cut9.row / (IWATA_GRID.length - 1);
     H = H.slice(cut9.row); V = V.slice(cut9.row);
     for (var c9 = 0; c9 < H.length; c9++) { H[c9] = { z: H[c9].z - cutZ9, r: H[c9].r }; V[c9] = { z: V[c9].z - cutZ9, r: V[c9].r }; }
+    exR9 = P.iwExitD / 2;
+    adL9 = (P.exitLen > 0) ? P.exitLen : Math.max(10, 0.8 * cut9.meanR * sc);
   }
-  return { wall: H, wallV: V, sEnd: sc * IWATA_GRID[IWATA_GRID.length - 1][0][2] - cutZ9, terminated: "table",
+  var res9 = { wall: H, wallV: V, sEnd: sc * IWATA_GRID[IWATA_GRID.length - 1][0][2] - cutZ9 + adL9, terminated: "table",
            iwScale: sc, iwThroatR: (cut9 ? cut9.meanR : IWATA_GRID[0][18][0]) * sc,
+           iwAdaptL: adL9, iwExitR: exR9, iwAdaptScale: null,
            iwCutU: cutU9, iwCutZ: cutZ9, iwCutD: cut9 ? 2 * cut9.meanR * sc : 0,
            iwTrunc: (P.trunc !== undefined && P.trunc > 0 ? P.trunc : 268),
            iwN: nCut9, iwP: (P.decoupeP !== undefined ? P.decoupeP : 11),
            Ttrace: null, diagnostics: [] };
+  if (adL9 > 0) {   // entry 233: area-monotone adapter -- per-ring radial factors measured on a 64-azimuth loft, shared by rings and meridians
+    res9.iwAdaptScale = buildIwataRings(res9, 64, 0, 0, { factorsOnly: true });
+    res9.wall = iwataAdapterMeridian(H, exR9, adL9, res9.iwAdaptScale);
+    res9.wallV = iwataAdapterMeridian(V, exR9, adL9, res9.iwAdaptScale);
+  }
+  return res9;
 }
 // Rings from the decoded grid: the DECOUPE cuts each STREAMLINE at
 // uCut(t) = 1 - n*|sin t|^p (t = the streamline's ellipse parameter, 90-5g deg,
 // exactly his sheet's readout), then each iso-fraction ring is resampled to
 // uniform GEOMETRIC azimuth per quadrant and mirrored (quarter symmetry).
-function buildIwataRings(horn, segs, flareR, wrap) {
+function buildIwataRings(horn, segs, flareR, wrap, opts9) {
   var G = IWATA_GRID, sc = horn.iwScale, n9 = Math.min(0.9, Math.max(0, horn.iwN || 0)), p9 = Math.max(0.1, horn.iwP || 1);
   var M = 130, NS = G.length, NG = 19;
   var pos = new Float32Array(M * segs * 3);
@@ -2071,9 +2201,11 @@ function buildIwataRings(horn, segs, flareR, wrap) {
     var A = G[i0][g], B = G[i0 + 1][g];
     return [(A[0] + f * (B[0] - A[0])) * sc, (A[1] + f * (B[1] - A[1])) * sc, (A[2] + f * (B[2] - A[2])) * sc];
   }
+  var NA9 = (horn.iwAdaptL > 0) ? 14 : 0, adL9 = horn.iwAdaptL || 0;   // entry 233: driver adapter rings prepended
+  if (NA9) pos = new Float32Array((M + NA9) * segs * 3);
   for (var iM = 0; iM < M; iM++) {
     var w = iM / (M - 1);
-    var k = iM * segs * 3;
+    var k = (iM + NA9) * segs * 3;
     for (var j = 0; j < segs; j++) {
       var tj = 2 * Math.PI * j / segs;
       var tq = tj % Math.PI; if (tq > Math.PI / 2) tq = Math.PI - tq;
@@ -2087,12 +2219,40 @@ function buildIwataRings(horn, segs, flareR, wrap) {
       var px = A9[0] + f2 * (B9[0] - A9[0]);
       var py = A9[1] + f2 * (B9[1] - A9[1]);
       var pzq = A9[2] + f2 * (B9[2] - A9[2]);
-      pos[k + j * 3] = pzq - (horn.iwCutZ || 0);
+      pos[k + j * 3] = pzq - (horn.iwCutZ || 0) + adL9;
       pos[k + j * 3 + 1] = (Math.cos(tj) >= 0 ? 1 : -1) * px;
       pos[k + j * 3 + 2] = (Math.sin(tj) >= 0 ? 1 : -1) * py;
     }
   }
-  return { rings: pos, M: M, segs: segs };
+  if (NA9) {   // entry 233: per-azimuth Hermite loft from the round driver exit to the cut section
+    var kC = NA9 * segs * 3, kN = (NA9 + 1) * segs * 3;
+    for (var jA = 0; jA < segs; jA++) {
+      var zc = pos[kC + jA * 3] - adL9, xc = pos[kC + jA * 3 + 1], yc = pos[kC + jA * 3 + 2], rc = Math.hypot(xc, yc);
+      var zn = pos[kN + jA * 3] - adL9, rn = Math.hypot(pos[kN + jA * 3 + 1], pos[kN + jA * 3 + 2]);
+      var slA = Math.abs(zn - zc) > 1e-9 ? (rn - rc) / (zn - zc) : 0;
+      var ptsA = iwataAdapterPts(zc, rc, slA, horn.iwExitR, adL9, NA9);
+      var ux = rc > 1e-9 ? xc / rc : Math.cos(2 * Math.PI * jA / segs), uy = rc > 1e-9 ? yc / rc : Math.sin(2 * Math.PI * jA / segs);
+      for (var aA = 0; aA < NA9; aA++) {
+        var kA = aA * segs * 3 + jA * 3;
+        pos[kA] = ptsA[aA].z; pos[kA + 1] = ux * ptsA[aA].r; pos[kA + 2] = uy * ptsA[aA].r;
+      }
+    }
+    // area-monotone: the H axis expands while the V axis contracts (round exit ->
+    // elongated Iwata section) and the raw Hermite product dips ~5-8% mid-way.
+    // Scale each adapter ring radially so its polygon area runs LINEARLY from the
+    // exit area to the cut-ring area. Factors depend on the ring index only, so
+    // they are computed once (64 azimuths, iwataWall) and shared with the meridians.
+    var fac9 = horn.iwAdaptScale;
+    if (!fac9) {
+      fac9 = [];
+      function ringArea9(iR) { var A = 0; for (var jR = 0; jR < segs; jR++) { var a1 = (iR * segs + jR) * 3, b1 = (iR * segs + (jR + 1) % segs) * 3; A += pos[a1 + 1] * pos[b1 + 2] - pos[b1 + 1] * pos[a1 + 2]; } return Math.abs(A) / 2; }
+      var A0 = ringArea9(0), A1 = ringArea9(NA9);
+      for (var aF = 0; aF < NA9; aF++) { var At = A0 + (A1 - A0) * aF / NA9, Ar = ringArea9(aF); fac9.push(Ar > 1e-9 ? Math.sqrt(At / Ar) : 1); }
+    }
+    if (opts9 && opts9.factorsOnly) return fac9;
+    for (var aS = 0; aS < NA9; aS++) for (var jS = 0; jS < segs; jS++) { var kS = aS * segs * 3 + jS * 3; pos[kS + 1] *= fac9[aS]; pos[kS + 2] *= fac9[aS]; }
+  } else if (opts9 && opts9.factorsOnly) return null;
+  return { rings: pos, M: M + NA9, segs: segs };
 }
 function araiFinBlockage(res, P) {
   // entry 171 (community report + Arai's own published figure): the fins block
@@ -3062,6 +3222,194 @@ function buildSolidMesh(prof, t, segs, ringsOv, lipStyle) {
   return { pos: pos, idx: new Uint32Array(idx), layout: { M: M, segs: segs, RO: RO, roBase: roBase, outBase: outBase } };
 }
 
+// entry 236 (zen_tm, forum #56: "this misshapen form probably isn't meant to
+// happen, even if this is an extreme setting" -- a mouth roll curled back
+// through the horn body). Principal-plane FOLD AUDIT: does the (z, r) meridian
+// cross itself, or cross the axis (r < 0)? Segment-segment test over all non-
+// adjacent pairs (n ~ 200-320 -> < 50k tests, negligible). Returns null when
+// clean, else the first crossing {z, r, i, j} (i < j, station indices). The
+// audit is geometric and family-blind: any dial combination that makes the
+// wall pass through itself trips it -- roundover R x wrap on a short horn,
+// R-OSSE b/m at extremes, a JMLC truncation past its own coil.
+function profileFold(P) {
+  if (!P || P.length < 4) return null;
+  var n = P.length, i, j;
+  for (i = 0; i < n; i++) if (P[i].r < -1e-9) return { z: P[i].z, r: P[i].r, i: i, j: i, axis: true };
+  function cross(ax, ay, bx, by, cx, cy) { return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax); }
+  for (i = 0; i < n - 1; i++) {
+    var a = P[i], b = P[i + 1];
+    if (Math.hypot(b.z - a.z, b.r - a.r) < 1e-12) continue;
+    for (j = i + 2; j < n - 1; j++) {
+      var c = P[j], d = P[j + 1];
+      if (Math.hypot(d.z - c.z, d.r - c.r) < 1e-12) continue;
+      // quick bbox reject
+      if (Math.max(a.z, b.z) < Math.min(c.z, d.z) || Math.min(a.z, b.z) > Math.max(c.z, d.z) ||
+          Math.max(a.r, b.r) < Math.min(c.r, d.r) || Math.min(a.r, b.r) > Math.max(c.r, d.r)) continue;
+      var d1 = cross(a.z, a.r, b.z, b.r, c.z, c.r), d2 = cross(a.z, a.r, b.z, b.r, d.z, d.r);
+      var d3 = cross(c.z, c.r, d.z, d.r, a.z, a.r), d4 = cross(c.z, c.r, d.z, d.r, b.z, b.r);
+      if (((d1 > 1e-12 && d2 < -1e-12) || (d1 < -1e-12 && d2 > 1e-12)) && ((d3 > 1e-12 && d4 < -1e-12) || (d3 < -1e-12 && d4 > 1e-12))) {
+        var t = d1 / (d1 - d2);
+        return { z: c.z + t * (d.z - c.z), r: c.r + t * (d.r - c.r), i: i, j: j, axis: false };
+      }
+    }
+  }
+  return null;
+}
+
+// ============ BULLET PHASE PLUG (entry 237) ============
+// maxgldrr, forum #53: "would it be possible to add an option for a bullet phase
+// plug?" -- for the 8"/12" LF-MF cone-driver horns the 200 mm throat now allows.
+// Marwan's steer (2026-08-21): "our phase plug should be printed in a way that is
+// attached to the horn and not the driver". So: an AXIAL BULLET, a body of
+// revolution on the horn axis with its flat base in the throat plane (z = 0) and
+// an elliptical nose to the tip at z = L (the classic Altec/JBL/Klipsch bullet
+// form), carried by N thin radial SPOKES that run from the bullet into the horn
+// wall -- printed as one part with the horn. What it does acoustically, and what
+// the tool claims: the bullet removes the throat-cavity volume in front of the
+// cone and shortens the longest cone-to-throat path (the reason bullets exist);
+// it also OCCLUDES area, so with "area compensation" the wall is opened so that
+// NET section area (wall minus bullet) follows the design law at every station --
+// the loading is preserved and the 1-D charts read the NET area (one geometry
+// source). No directivity or path-length benefit is quantified: that needs the
+// driver's cone geometry, which the app does not have, and BEM. The bullet body
+// enters the BEM export as a floating closed rigid solid (same path as the WN
+// fins); the spokes do not (they touch the wall and would need a Boolean union) --
+// the README says so.
+// Nose shapes (entry 237, the three a turned bullet actually comes in):
+//   "bullet"  tangent ogive -- circular arc of radius (R^2+L^2)/(2R) leaving the
+//             base PARALLEL to the axis (dr/dz = 0 at z = 0) and meeting the axis at
+//             the tip; the classic machined bullet.
+//   "ellipse" half-ellipsoid of revolution -- r = R sqrt(1 - (z/L)^2).
+//   "cone"    straight taper -- r = R (1 - z/L).
+// Ordered cone < ogive < ellipse at every station (fuller noses hold more volume).
+function bulletRAt(plug, z) {
+  if (!plug || z < 0 || z >= plug.L) return 0;
+  var R = plug.D / 2, L = plug.L, u = z / L, sh = plug.shape || "bullet";
+  if (sh === "cone") return R * (1 - u);
+  if (sh === "ellipse") return R * Math.sqrt(Math.max(0, 1 - u * u));
+  var rho = (R * R + L * L) / (2 * R);                  // tangent ogive
+  return Math.max(0, Math.sqrt(Math.max(0, rho * rho - z * z)) + R - rho);
+}
+function bulletProfile(D, L, n, shape) {
+  var out = [], plug = { D: D, L: L, shape: shape || "bullet" };
+  n = n || 24;
+  for (var i = 0; i <= n; i++) {
+    var z = L * i / n;                   // 0 = base (throat plane) .. L = tip
+    out.push({ z: z, r: i === n ? 0 : bulletRAt(plug, z) });
+  }
+  return out;
+}
+// Area-compensated profile: scale a, b (and the corner radius) of every base
+// station inside the bullet so sectionArea(wall) - pi*rb^2 == the design area.
+// occl[i] = pi*rb(z_i)^2 is stored for the 1-D estimators (they subtract it).
+function plugApply(prof, plug, compensate) {
+  if (!prof || !prof.H || !plug || !(plug.D > 0) || !(plug.L > 0)) return prof;
+  var H = prof.H, V = prof.V, B = prof.baseStations || H.length;
+  var shape = prof.shape || "ellipse", sA = prof.seNArr, rA = prof.rhoArr, rho = prof.rho || 0;
+  var H2 = H.slice(), V2 = V.slice(), rA2 = rA ? rA.slice() : null, occl = new Array(H.length), maxK = 1, maxDr = 0;
+  for (var i = 0; i < H.length; i++) {
+    var z = 0.5 * (H[i].z + (V[i] ? V[i].z : H[i].z));
+    var rb = (i < B) ? bulletRAt(plug, z) : 0;
+    occl[i] = Math.PI * rb * rb;
+    if (compensate && rb > 0) {
+      var shp = sA ? "sellipse:" + sA[Math.min(i, sA.length - 1)] : shape;
+      var r9 = rA ? rA[Math.min(i, rA.length - 1)] : rho;
+      var A0 = sectionArea(shp, H[i].r, V[i].r, r9);
+      if (A0 > 1e-9) {
+        var k = Math.sqrt((A0 + occl[i]) / A0);
+        H2[i] = { z: H[i].z, r: H[i].r * k }; V2[i] = { z: V[i].z, r: V[i].r * k };
+        if (rA2) rA2[i] = r9 * k;
+        if (k > maxK) { maxK = k; maxDr = H[i].r * (k - 1); }
+      }
+    }
+  }
+  return Object.assign({}, prof, { H: H2, V: V2, rhoArr: rA2, occl: occl,
+    plug: { D: plug.D, L: plug.L, shape: plug.shape || "bullet", spokes: plug.spokes, spokeT: plug.spokeT, compensated: !!compensate, maxScale: maxK, maxDr: maxDr } });
+}
+// Closed solid of revolution: base disc at z = 0, elliptical nose, tip vertex.
+// Coordinates match buildRings: [z, x, y]. Outward orientation checked by volume.
+function bulletMesh(plug, segs) {
+  var prof = bulletProfile(plug.D, plug.L, 28, plug.shape), NR = prof.length - 1;   // last profile point is the tip (r = 0)
+  var pos = [], idx = [];
+  pos.push(0, 0, 0);                                     // 0: base centre
+  for (var i = 0; i < NR; i++) for (var j = 0; j < segs; j++) {
+    var th = 2 * Math.PI * j / segs;
+    pos.push(prof[i].z, prof[i].r * Math.cos(th), prof[i].r * Math.sin(th));
+  }
+  var tip = pos.length / 3; pos.push(plug.L, 0, 0);
+  function V(i, j) { return 1 + i * segs + (j % segs); }
+  for (var j2 = 0; j2 < segs; j2++) idx.push(0, V(0, j2 + 1), V(0, j2));                    // base disc (faces -z)
+  for (var i2 = 0; i2 < NR - 1; i2++) for (var j3 = 0; j3 < segs; j3++) {
+    idx.push(V(i2, j3), V(i2, j3 + 1), V(i2 + 1, j3));
+    idx.push(V(i2, j3 + 1), V(i2 + 1, j3 + 1), V(i2 + 1, j3));
+  }
+  for (var j4 = 0; j4 < segs; j4++) idx.push(V(NR - 1, j4), V(NR - 1, j4 + 1), tip);
+  return orientOutward({ pos: new Float32Array(pos), idx: new Uint32Array(idx) });
+}
+function orientOutward(m) {
+  var p = m.pos, ix = m.idx, vol = 0;
+  for (var t = 0; t < ix.length; t += 3) {
+    var A = ix[t] * 3, B = ix[t + 1] * 3, C = ix[t + 2] * 3;
+    vol += (p[A] * (p[B + 1] * p[C + 2] - p[B + 2] * p[C + 1]) - p[A + 1] * (p[B] * p[C + 2] - p[B + 2] * p[C]) + p[A + 2] * (p[B] * p[C + 1] - p[B + 1] * p[C])) / 6;
+  }
+  if (vol < 0) for (var t2 = 0; t2 < ix.length; t2 += 3) { var q = ix[t2 + 1]; ix[t2 + 1] = ix[t2 + 2]; ix[t2 + 2] = q; }
+  m.volume = Math.abs(vol);
+  return m;
+}
+// One spoke: a thin plate of thickness t at azimuth phi, from inside the bullet
+// (overlap ovIn) to inside the horn wall shell (overlap ovOut), spanning
+// z in [0.12 L, 0.72 L]. Built from the profile's own section (sectionPoint at
+// this azimuth, blended z like buildRings) so it meets the wall wherever the
+// section puts it -- ellipse, superellipse or rounded rectangle alike.
+function spokeMesh(prof, plug, phi, t, ovIn, ovOut) {
+  var H = prof.H, V = prof.V, B = prof.baseStations || H.length;
+  var shape = prof.shape || "ellipse", sA = prof.seNArr, rA = prof.rhoArr, rho = prof.rho || 0;
+  var z1 = 0.12 * plug.L, z2 = 0.72 * plug.L, u = phi / (2 * Math.PI);
+  var cx = Math.cos(phi), sy = Math.sin(phi), tx = -Math.sin(phi), ty = Math.cos(phi);
+  var samples = [];
+  for (var i = 0; i < B; i++) {
+    var shp = sA ? "sellipse:" + sA[Math.min(i, sA.length - 1)] : shape;
+    var sp = sectionPoint(shp, H[i].r, V[i].r, rA ? rA[Math.min(i, rA.length - 1)] : rho, u);
+    var z = H[i].z * sp.wH + V[i].z * (1 - sp.wH);
+    if (z < z1 || z > z2) continue;
+    var rw = Math.hypot(sp.x, sp.y), rb = bulletRAt(plug, z);
+    if (rw - rb < 2 * t) continue;                      // no room for a spoke here
+    samples.push({ z: z, rin: Math.max(0.2, rb - ovIn), rout: rw + ovOut });
+  }
+  if (samples.length < 2) return null;
+  var pos = [], idx = [], n = samples.length;
+  for (var s = 0; s < n; s++) {
+    var q = samples[s];
+    // 0: in+  1: in-  2: out+  3: out-   (+/- = tangential side)
+    pos.push(q.z, q.rin * cx + tx * t / 2, q.rin * sy + ty * t / 2);
+    pos.push(q.z, q.rin * cx - tx * t / 2, q.rin * sy - ty * t / 2);
+    pos.push(q.z, q.rout * cx + tx * t / 2, q.rout * sy + ty * t / 2);
+    pos.push(q.z, q.rout * cx - tx * t / 2, q.rout * sy - ty * t / 2);
+  }
+  function Q(a, b, c, d) { idx.push(a, b, c, a, c, d); }
+  for (var s2 = 0; s2 < n - 1; s2++) {
+    var o = s2 * 4, p = o + 4;
+    Q(o + 0, o + 2, p + 2, p + 0);   // + side face
+    Q(o + 1, p + 1, p + 3, o + 3);   // - side face
+    Q(o + 0, p + 0, p + 1, o + 1);   // inner face
+    Q(o + 2, o + 3, p + 3, p + 2);   // outer face
+  }
+  Q(0, 1, 3, 2);                                          // end cap at z1
+  var e = (n - 1) * 4; Q(e + 0, e + 2, e + 3, e + 1);      // end cap at z2
+  return orientOutward({ pos: new Float32Array(pos), idx: new Uint32Array(idx) });
+}
+function plugMeshes(prof, segs, wallThick) {
+  var plug = prof && prof.plug;
+  if (!plug || !(plug.D > 0)) return [];
+  var out = [bulletMesh(plug, segs)];
+  var N = Math.max(0, Math.round(plug.spokes || 0)), t = Math.max(0.8, plug.spokeT || 3);
+  for (var k = 0; k < N; k++) {
+    var m = spokeMesh(prof, plug, Math.PI / 2 + 2 * Math.PI * k / N, t, 1.0, Math.min(2, 0.6 * (wallThick || 3)));
+    if (m) out.push(m);
+  }
+  return out;
+}
+
 function rollAudit(sm) {
   // entry 178 (user report: "we need a full proof method" for roundovers): the
   // universal roll invariants. Any geometry change that breaks a mouth roll
@@ -3688,10 +4036,10 @@ function hornResponse(prof, fArr, coordMode, sMap) {
   // radiation impedance. Constant throat volume velocity; on-axis far-field
   // p ~ j*omega*rho*U_mouth/(2*pi*r). Returned in dB relative to the top-octave
   // median (shape, not absolute SPL). A 1-D Webster estimate -- NOT a BEM substitute.
-  var H = prof.H, V = prof.V, M = H.length, i;
+  var H = prof.H, V = prof.V, M = websterEnd(prof), i;   /* entry 238: the chain ends at the mouth plane */
   var Ssta = [], dl = [];
   var shp = prof.shape || "ellipse", rho2 = prof.rho || 0, rA = prof.rhoArr, sA = prof.seNArr;
-  for (i = 0; i < M; i++) Ssta.push(sectionArea(sA ? "sellipse:" + sA[Math.min(i, sA.length - 1)] : shp, H[i].r, V[i].r, rA ? rA[Math.min(i, rA.length - 1)] : rho2));
+  for (i = 0; i < M; i++) Ssta.push(sectionArea(sA ? "sellipse:" + sA[Math.min(i, sA.length - 1)] : shp, H[i].r, V[i].r, rA ? rA[Math.min(i, rA.length - 1)] : rho2) - (prof.occl ? prof.occl[i] || 0 : 0));   /* entry 237: NET area (bullet phase plug occlusion subtracted) */
   function sOfZ(zq) {
     if (!sMap || !sMap.length) return zq;
     if (zq <= sMap[0].z) return sMap[0].s;
@@ -3766,11 +4114,11 @@ function hornMaxSPL(prof, fArr, coordMode, sMap, opts) {
   opts = opts || {};
   var GAM = 1.402, RHO9 = 1.205, C9 = C / 1000;            // SI locals (c from the engine constant)
   var d9 = opts.d || 4;
-  var H = prof.H, M = H.length, i;
+  var H = prof.H, M = websterEnd(prof), i;   /* entry 238: mouth plane */
   var shp = prof.shape || "ellipse", rho2 = prof.rho || 0, rA = prof.rhoArr, sA = prof.seNArr;
   var Ssta = [], zRaw = [];
   for (i = 0; i < M; i++) {
-    Ssta.push(1e-6 * sectionArea(sA ? "sellipse:" + sA[Math.min(i, sA.length - 1)] : shp, H[i].r, prof.V[i].r, rA ? rA[Math.min(i, rA.length - 1)] : rho2));
+    Ssta.push(1e-6 * (sectionArea(sA ? "sellipse:" + sA[Math.min(i, sA.length - 1)] : shp, H[i].r, prof.V[i].r, rA ? rA[Math.min(i, rA.length - 1)] : rho2) - (prof.occl ? prof.occl[i] || 0 : 0)));   /* entry 237: NET area */
     zRaw.push(H[i].z);
   }
   function sOfZ(zq) {
@@ -4152,7 +4500,14 @@ function abecProject(o) {
     "FIRST-RUN NOTE: these scripts follow ABEC3 grammar verified against\n" +
     "working public examples, but this generator could not be tested inside\n" +
     "AKABAK itself. If anything fails to parse on your machine, please report\n" +
-    "it (with the error line) -- it will be fixed the same day.\n";
+    "it (with the error line) -- it will be fixed the same day.\n" +
+    (o.plug ? "\nPHASE PLUG (entry 237): the mesh contains the bullet as a separate closed\n" +
+      "RIGID body (bullet O " + o.plug.D.toFixed(1) + " mm, length " + o.plug.L.toFixed(1) + " mm) inside the throat,\n" +
+      "oriented outward into the air like the horn walls. The " + (o.plug.spokes || 0) + " printed spokes\n" +
+      "are NOT in the BEM mesh (they touch the wall and would need a Boolean\n" +
+      "union); acoustically they are thin, but say so when you publish. The\n" +
+      "walls were opened so that NET area (wall minus bullet) follows the\n" +
+      "design law -- the loading you see is the compensated one.\n" : "");
   return { solving: solving, observation: observation, readme: readme };
 }
 function akabakLEM(o) {
@@ -4209,7 +4564,7 @@ function akabakLEM(o) {
   for (i = 0; i < M; i++) {
     if (H[i].z < -1e-9) { skipped++; continue; }
     var li = sOfZ(H[i].z), ai = sectionArea(sA ? "sellipse:" + sA[Math.min(i, sA.length - 1)] : shp,
-      H[i].r, V[i].r, rA ? rA[Math.min(i, rA.length - 1)] : rho2);
+      H[i].r, V[i].r, rA ? rA[Math.min(i, rA.length - 1)] : rho2) - (prof.occl ? prof.occl[i] || 0 : 0);   /* entry 237: NET area */
     if (!isFinite(li) || !isFinite(ai) || ai <= 0) continue;
     if (L.length && li <= L[L.length - 1] + 1e-9) continue;   // monotone coordinate only
     L.push(li); A.push(ai);
@@ -4237,6 +4592,7 @@ function akabakLEM(o) {
     "|HORN STUDIO -> AKABAK SCRIPT (LEM).  " + name + "\n" +
     "|" + (o.build ? "Build " + o.build + ".  " : "") + "Family: " + (o.family || "?") +
     "   Section: " + (o.section || shp) + "\n" +
+    (o.tag ? "|Design: " + String(o.tag).replace(/[\r\n]/g, " ") + "\n" : "") +   /* entry 238: provenance */
     "|Throat area " + cm2(area[0]) + " cm2   Mouth area " + cm2(area[nSeg]) + " cm2   " +
     (wf ? "Wavefront" : "Axial") + " length " + cm(tot) + " cm   " + nSeg + " conical segments\n" +
     "|" + akRep("=", 88) + "\n" +
@@ -5003,7 +5359,8 @@ function buildBEMProject(horn, prof, ringsOv, opts) {
 // FACE_SURFACE (7 entities), plus the standard product/units blocks. Faceted,
 // not NURBS: same fidelity as the STL, in a STEP container every CAD package
 // imports; honest label on the button. Millimetres via SI_UNIT(.MILLI.,.METRE.).
-function stepFromMesh(pos, idx, name) {
+function stepTag(tag) { return tag ? ",'" + String(tag).replace(/'/g, "''").replace(/[\r\n]/g, ' ') + "'" : ''; }   // entry 238: design provenance in the STEP header (STEP string: apostrophes doubled)
+function stepFromMesh(pos, idx, name, tag) {
   var L = [], id = 0;
   function E(s) { id++; L.push('#' + id + '=' + s + ';'); return id; }
   var nV = pos.length / 3, vid = new Array(nV);
@@ -5050,7 +5407,7 @@ function stepFromMesh(pos, idx, name) {
   var pds = E("PRODUCT_DEFINITION_SHAPE('','',#" + pd + ")");
   E("SHAPE_DEFINITION_REPRESENTATION(#" + pds + ",#" + rep + ")");
   var now = new Date().toISOString().slice(0, 19);
-  return "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('Horn Studio faceted export'),'2;1');\n" +
+  return "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('Horn Studio faceted export'" + stepTag(tag) + "),'2;1');\n" +
     "FILE_NAME('" + name + ".step','" + now + "',('Horn Studio'),('Silence Please'),'Horn Studio','','');\n" +
     "FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 2 1 1 }'));\nENDSEC;\nDATA;\n" + L.join("\n") + "\nENDSEC;\nEND-ISO-10303-21;\n";
 }
@@ -5238,7 +5595,7 @@ function quadLoft(rings, M, segs, cornerIdx) {
 // a flat annular throat flange and a flat mouth end face, every edge shared
 // by exactly two faces, CLOSED_SHELL -> MANIFOLD_SOLID_BREP. CAD imports a
 // body with wall thickness, real corner edges, and machinable end faces.
-function stepFromNurbsSolidQuad(qi, qo, name) {
+function stepFromNurbsSolidQuad(qi, qo, name, tag) {
   var L = [], id = 0;
   function E9(txt) { id++; L.push("#" + id + "=" + txt + ";"); return id; }
   function knotStr(K) {
@@ -5313,10 +5670,10 @@ function stepFromNurbsSolidQuad(qi, qo, name) {
   var pd = E9("PRODUCT_DEFINITION('design','',#" + pdf + ",#" + pdc + ")");
   var pds = E9("PRODUCT_DEFINITION_SHAPE('','',#" + pd + ")");
   E9("SHAPE_DEFINITION_REPRESENTATION(#" + pds + ",#" + rep + ")");
-  var head = "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('Horn Studio thickened solid, sharp-corner four-patch walls'),'2;1');\nFILE_NAME('" + name + ".step','',(''),(''),'Horn Studio','','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 2 1 1 }'));\nENDSEC;\nDATA;\n";
+  var head = "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('Horn Studio thickened solid, sharp-corner four-patch walls'" + stepTag(tag) + "),'2;1');\nFILE_NAME('" + name + ".step','',(''),(''),'Horn Studio','','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 2 1 1 }'));\nENDSEC;\nDATA;\n";
   return head + L.join("\n") + "\nENDSEC;\nEND-ISO-10303-21;\n";
 }
-function stepFromNurbsQuad(q, name) {
+function stepFromNurbsQuad(q, name, tag) {
   var L = [], id = 0;
   function E9(txt) { id++; L.push("#" + id + "=" + txt + ";"); return id; }
   function knotStr(K) {
@@ -5377,10 +5734,10 @@ function stepFromNurbsQuad(q, name) {
   var pd = E9("PRODUCT_DEFINITION('design','',#" + pdf + ",#" + pdc + ")");
   var pds = E9("PRODUCT_DEFINITION_SHAPE('','',#" + pd + ")");
   E9("SHAPE_DEFINITION_REPRESENTATION(#" + pds + ",#" + rep + ")");
-  var head = "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('Horn Studio NURBS four-patch sharp-corner surface'),'2;1');\nFILE_NAME('" + name + ".step','',(''),(''),'Horn Studio','','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 2 1 1 }'));\nENDSEC;\nDATA;\n";
+  var head = "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('Horn Studio NURBS four-patch sharp-corner surface'" + stepTag(tag) + "),'2;1');\nFILE_NAME('" + name + ".step','',(''),(''),'Horn Studio','','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 2 1 1 }'));\nENDSEC;\nDATA;\n";
   return head + L.join("\n") + "\nENDSEC;\nEND-ISO-10303-21;\n";
 }
-function stepFromNurbs(sf, name) {
+function stepFromNurbs(sf, name, tag) {
   var L = [], id = 0;
   function E9(txt) { id++; L.push("#" + id + "=" + txt + ";"); return id; }
   function knotStr(K) {
@@ -5448,7 +5805,7 @@ function stepFromNurbs(sf, name) {
   var pd = E9("PRODUCT_DEFINITION('design','',#" + pdf + ",#" + pdc + ")");
   var pds = E9("PRODUCT_DEFINITION_SHAPE('','',#" + pd + ")");
   E9("SHAPE_DEFINITION_REPRESENTATION(#" + pds + ",#" + rep + ")");
-  var head = "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('Horn Studio NURBS surface'),'2;1');\nFILE_NAME('" + name + ".step','',(''),(''),'Horn Studio','','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));\nENDSEC;\nDATA;\n";
+  var head = "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('Horn Studio NURBS surface'" + stepTag(tag) + "),'2;1');\nFILE_NAME('" + name + ".step','',(''),(''),'Horn Studio','','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));\nENDSEC;\nDATA;\n";
   return head + L.join("\n") + "\nENDSEC;\nEND-ISO-10303-21;\n";
 }
 function bemToMsh(bp, opts) {
@@ -5540,6 +5897,21 @@ function bemBandSize(mouthPerMM, depthMM, fTop, budgetElems) {
   }
   return { stations: sta, segs: segs, targetEdge: eT };
 }
+// entry 238 (found while adding the 20% loading corner): the 1-D chain was being
+// fed the CURLED-BACK LIP. Past the mouth plane a rolled wall's z DECREASES, so
+// the axial spacing clamp gave 1e-6 mm elements carrying a large area step --
+// an abrupt "reflector" that put +-0.55 top-octave ripple on a JMLC at
+// truncation 175 (0.035 at 90) and the +-0.76 on R-OSSE that the hornlab review
+// had blamed on physics. It was the coordinate. The Webster chain now ends at
+// the MOUTH PLANE -- the base station of maximum z -- with the radiation load
+// applied there; the lip beyond it is geometry, not duct. MEASURED after: JMLC
+// trunc 175 asymptote 1.000, ripple 0.035, 20% corner 399 Hz at fc 400.
+function websterEnd(prof) {
+  var H = prof.H, im = 0;   // ALL stations: a roundover that ends at 90 deg is duct up to the mouth plane; only what curls past it is lip
+  for (var i = 1; i < H.length; i++) if (H[i].z > H[im].z) im = i;
+  return Math.max(2, im + 1);
+}
+
 function throatImpedance(prof, fArr, coordMode, sMap) {
   // AUDIT #2 (2026-07-13): the propagation coordinate is now explicit -- the old
   // (d1+d2)/2 averaged wall slant was never a justified Webster coordinate.
@@ -5548,10 +5920,10 @@ function throatImpedance(prof, fArr, coordMode, sMap) {
   //   coordMode "wavefront" : sMap = monotone [{z, s}] mapping station z to the actual
   //                           marching coordinate (JMLC)
   // Callers must never pass an averaged wall slant.
-  var H = prof.H, V = prof.V, M = H.length, i;
+  var H = prof.H, V = prof.V, M = websterEnd(prof), i;   /* entry 238: the chain ends at the mouth plane */
   var Ssta = [], dl = [];
   var shp = prof.shape || "ellipse", rho2 = prof.rho || 0, rA = prof.rhoArr, sA = prof.seNArr;
-  for (i = 0; i < M; i++) Ssta.push(sectionArea(sA ? "sellipse:" + sA[Math.min(i, sA.length - 1)] : shp, H[i].r, V[i].r, rA ? rA[Math.min(i, rA.length - 1)] : rho2));
+  for (i = 0; i < M; i++) Ssta.push(sectionArea(sA ? "sellipse:" + sA[Math.min(i, sA.length - 1)] : shp, H[i].r, V[i].r, rA ? rA[Math.min(i, rA.length - 1)] : rho2) - (prof.occl ? prof.occl[i] || 0 : 0));   /* entry 237: NET area (bullet phase plug occlusion subtracted) */
   function sOfZ(zq) {
     if (!sMap || !sMap.length) return zq;
     if (zq <= sMap[0].z) return sMap[0].s;
@@ -5641,7 +6013,7 @@ function mouthCorner(prof, areaOverride) {
     family: "jmlc", fc: 400, throatD: 35.56, entryDeg: 0, T0: 0.7, trunc: 175, aplat: 4, ellMu: 0.88, ellSigma: 0.53, decoupeN: 0.3, decoupeP: 11, throatShape: "round", lipStyle: "round", bemF: 14333, bemSym: "full", bemTarget: "akabak", bemModel: "free", bemSrc: "flat", bemPrev: false, dirOv: false, ribW: 0, ribH: 0, ribL: 0, exitLen: 0, exitDeg: 10, plateT: 0, plateD: 0, boltN: 0, boltCircleD: 0, boltHoleD: 0, boltRot: 0,
     petf: false, petfPreset: "off", petfShape: "exp", petfRef: "throat", Tadd: 3.5, fmult: 3, sOff: 0,
     fins: "off", shell: "uniform", finT: 10, adaptL: 25, wnUL: 0.5, wnUC: 0.68, showConstr: false, wnFins: 0, wnFinT: 1.0, wnClear: 0.4, wnFinU1: 0.7,
-    aspect: 1.0, section: "ellipse", cornerR: 60, covH: 90, covV: 40, f0: 800, osK: 1.0, osS: 0.7, osN: 4, seN: 2.5, spProj: "flat", f0V: 0, TaddV: 0.4, fmultV: 2, rosR: 130, rosA: 39, rosA0: 7.5, rosK: 1.8, rosRr: 0.3, rosB: 0.3, rosM: 0.8, rosQ: 3.7, flareR: 20, flareWrap: 0, thick: 5
+    aspect: 1.0, section: "ellipse", cornerR: 60, covH: 90, covV: 40, f0: 800, osK: 1.0, osS: 0.7, osN: 4, seN: 2.5, spProj: "flat", f0V: 0, TaddV: 0.4, fmultV: 2, rosR: 130, rosA: 39, rosAV: 0, rosRV: 0, rosA0: 7.5, plugD: 0, plugL: 0, plugSpokes: 3, plugSpokeT: 3, plugShape: "bullet", plugMode: "designed", csvFmt: "dot", rosK: 1.8, rosRr: 0.3, rosB: 0.3, rosM: 0.8, rosQ: 3.7, flareR: 20, flareWrap: 0, thick: 5
   };
   var INIT_DEFAULTS = JSON.parse(JSON.stringify(S));   /* entry 220: snapshot of the pristine baseline BEFORE the autosave restore merges into S -- the FAMILY DEFAULTS full reset restores from here */
   var FAMILY_NAMES = { jmlc: "JMLC isophase", jmlcell: "JMLC quasi-elliptical (2007)", iwata: "Iwata (JMLC 2007)", swh: "Kugelwellen (SWH)", tractrix: "Tractrix", hypex: "Hypex (plane wave)", conical: "Conical", cd: "CD horn (Keele 1975)", biradial: "Yuichi biradial (after Arai)", os: "OS-SE waveguide (Bat\u00edk 2020)", osc: "Classic OS (Geddes 1989)", wn: "William Neile biradial (equal-path)", rosse: "R-OSSE (Bat\u00edk 2022)" };
@@ -5651,7 +6023,9 @@ function mouthCorner(prof, areaOverride) {
   function esc(x) { return x.toFixed(2); }
 
   function hornParams(petfOverride) {
-    return { family: S.family, cdRound: S.family === "cd" && S.section !== "rrect", fc: S.fc, rt: (S.throatShape === "rect" && S.ribW > 0 && S.ribH > 0) ? Math.sqrt(S.ribW * S.ribH / Math.PI) : S.throatD / 2, /* entry 94: rect throat defines the area; rt = area-equivalent */ entryDeg: S.family === "os" ? (S.exitDeg || 0) / 2 : S.entryDeg, /* entry 219/221: os's a0 IS formula 5's throat angle -- driven by the driver exit dial (included -> half), never by jmlc's stale entryDeg; the curve launches from z=0, no linear run (the cone is inside the driver, entry-190 standard) */ T0: S.T0, adaptL: S.adaptL, aplat: S.aplat, ellMu: S.ellMu, ellSigma: S.ellSigma, decoupeN: S.decoupeN, decoupeP: S.decoupeP, iwExitD: S.iwExitD, wnCovH: S.wnCovH, wnCovV: S.wnCovV, trunc: S.family === "jmlc" ? Math.min(268, S.trunc + S.flareWrap) : S.trunc, /* jmlc: wrap EXTENDS the native roll -- no invented arc */
+    return { family: S.family, cdRound: S.family === "cd" && S.section !== "rrect", fc: S.fc, rt: (S.throatShape === "rect" && S.ribW > 0 && S.ribH > 0) ? Math.sqrt(S.ribW * S.ribH / Math.PI) : S.throatD / 2,
+      rtH: (S.throatShape === "rect" && S.ribW > 0 && S.ribH > 0) ? S.ribW / 2 : 0, rtV: (S.throatShape === "rect" && S.ribW > 0 && S.ribH > 0) ? S.ribH / 2 : 0,   /* entry 235: per-plane throat half-apertures -- os/osc/rosse launch each principal plane from its own aperture (kodomo #54) */
+      rosAV: S.rosAV, rosRV: S.rosRV, /* entry 94: rect throat defines the area; rt = area-equivalent */ entryDeg: S.family === "os" ? (S.exitDeg || 0) / 2 : S.entryDeg, /* entry 219/221: os's a0 IS formula 5's throat angle -- driven by the driver exit dial (included -> half), never by jmlc's stale entryDeg; the curve launches from z=0, no linear run (the cone is inside the driver, entry-190 standard) */ T0: S.T0, adaptL: S.adaptL, aplat: S.aplat, ellMu: S.ellMu, ellSigma: S.ellSigma, decoupeN: S.decoupeN, decoupeP: S.decoupeP, iwExitD: S.iwExitD, wnCovH: S.wnCovH, wnCovV: S.wnCovV, trunc: S.family === "jmlc" ? Math.min(268, S.trunc + S.flareWrap) : S.trunc, /* jmlc: wrap EXTENDS the native roll -- no invented arc */
       petf: petfOverride === undefined ? (S.petf && PETF_FAMILIES[S.family]) : petfOverride,
       petfShape: S.petfShape, petfRef: S.petfRef, wnUL: S.wnUL, wnUC: S.wnUC, wnFins: S.wnFins, fins: S.fins, finT: S.finT,   /* entry 171: the wall law needs the fin mode (blockage compensation) */ Tadd: S.Tadd, fmult: S.fmult, sOff: S.sOff, cornerR: S.cornerR, covH: S.covH, covV: S.covV, f0: S.f0, f0V: S.f0V, osK: S.osK, osS: S.osS, osN: S.osN, rosR: S.rosR, rosA: S.rosA, rosA0: S.rosA0, rosK: S.rosK, rosRr: S.rosRr, rosB: S.rosB, rosM: S.rosM, rosQ: S.rosQ };
   }
@@ -5705,6 +6079,12 @@ function mouthCorner(prof, areaOverride) {
     if ((S.exitLen > 0 || (S.family === "osc" && S.exitDeg > 0)) && p9 && p9.H && !p9.azProfiles && S.family !== "cd" && S.family !== "wn" && S.family !== "biradial" && S.family !== "iwata" && S.family !== "os" && S.family !== "rosse") {   /* entry 219: os/rosse build their entry NATIVELY in the engine solve (C1 by construction) -- the graft that rippled them is banned there */
       p9 = Object.assign({}, p9, S.family === "osc" ? { H: osVirtualEntry(p9.H, p9.H[0].r, S.exitDeg / 2, S.exitLen, S.covH || 90, p9.baseStations || 0), V: osVirtualEntry(p9.V, p9.V[0].r, S.exitDeg / 2, S.exitLen, S.covV || S.covH || 90, p9.baseStations || 0) } : { H: straightEntry(p9.H, p9.H[0].r, S.exitDeg / 2, S.exitLen), V: straightEntry(p9.V, p9.V[0].r, S.exitDeg / 2, S.exitLen) });
     }
+    /* entry 237: BULLET PHASE PLUG, last -- it reads the finished section (shape,
+       exponent blend, corner radii) and opens the walls so NET area (wall minus
+       bullet) follows the law; prof.occl feeds the 1-D estimators (one geometry
+       source, entry 215). Profile families only (rings families keep their throats). */
+    if (S.plugD > 0 && p9 && p9.H && !p9.azProfiles && S.family !== "wn" && S.family !== "biradial" && S.family !== "iwata")
+      p9 = plugApply(p9, { D: S.plugD, L: S.plugL > 0 ? S.plugL : 2 * S.plugD, shape: S.plugShape || "bullet", spokes: S.plugSpokes, spokeT: S.plugSpokeT }, S.plugMode !== "retrofit");
     return p9;
   }
   function profOfBase(horn, n) {
@@ -5715,6 +6095,7 @@ function mouthCorner(prof, areaOverride) {
       return planeProfilesWN(horn, n, S.flareR, S.flareR, 90 + S.flareWrap, S.throatD / 2, "rrect");
     }
     if (S.family === "wn") return planeProfilesWN(horn, n, S.flareR, S.flareR, 90 + S.flareWrap, S.throatD / 2, "rrect"); // per-station rho from rhoTrk (round-throat corner quadrants)
+    if ((S.family === "os" || S.family === "rosse") && horn.wallV) return planeProfilesWN(horn, n, S.flareR, S.flareR, 90 + S.flareWrap, S.throatD / 2, shp, S.section === "rrect" ? S.cornerR : undefined);   /* entry 235: per-plane OS-SE / R-OSSE (own throat aperture + own coverage per plane) */
     if (S.family === "osc" && horn.wallV) return planeProfilesWN(horn, n, S.flareR, S.flareR, 90 + S.flareWrap, S.throatD / 2, shp, S.section === "rrect" ? S.cornerR : undefined); // per-axis Geddes: covH/covV drive independent OS laws; entry 228 ("I would like to support those square horns"): the section morph passes through -- rrect/sellipse are honest geometric extrusions between the two OS laws (cornerR paced by the entry-204 ramp, exact circle at the throat)
     if (S.family === "biradial") return planeProfilesWN(horn, n, 0, S.flareR, 90 + S.flareWrap, S.throatD / 2, "rrect"); // H stays wing-flat (plates end at the wings); V carries the roundover -- the top/bottom plates are what physically get rolled
     if (S.family === "swh" && S.aspect > 1.001) {
@@ -5746,12 +6127,15 @@ function mouthCorner(prof, areaOverride) {
     }
     if (S.family === "jmlcell" && horn.wallV) return planeProfilesWN(horn, n, 0, 0, 0, S.throatD / 2, "ellipse"); // entry 90: H/V from the quasi-elliptical morph (entry-88 gap: it fell through to the single-wall path and the V axis never reached the loft)
     if (S.family === "jmlc") return planeProfiles(horn.wall, n, S.aspect, 0, 0, 0, shp, S.throatD / 2, S.cornerR); // roundover = the construction itself (wrap folded into trunc in hornParams)
-    return planeProfiles(horn.wall, n, S.aspect, S.flareR, S.flareR, 90 + S.flareWrap, shp, S.throatD / 2, S.cornerR);
+    return planeProfiles(horn.wall, n, (S.family === "os" || S.family === "rosse") ? 1 : S.aspect, S.flareR, S.flareR, 90 + S.flareWrap, shp, S.throatD / 2, S.cornerR);   /* entry 235: os/rosse ellipticity is per-plane coverage now, never the stretch */
   }
   function isRound() {
     if (S.family === "cd") return S.section !== "rrect";
     if (S.family === "biradial" || S.family === "wn") return false; // biradial mouths get W x H, never a diameter (directive 15)
-    if (S.family === "osc" && (S.covV || S.covH) !== S.covH) return false;   /* entry 193: Classic OS ellipticity comes from covH != covV (independent per-plane Geddes laws) -- the aspect/section check below cannot see it, so elliptical osc read as round and the CSV silently dropped the V wall */
+    if (S.family === "osc" && (S.covV || S.covH) !== S.covH) return false;
+    if ((S.family === "os" || S.family === "rosse" || S.family === "osc") && S.throatShape === "rect" && S.ribW > 0 && S.ribH > 0 && S.ribW !== S.ribH) return false;   /* entry 235: rect throat launches per-plane apertures */
+    if (S.family === "os" && (S.covV || S.covH) !== S.covH) return false;   /* entry 235: OS-SE per-plane coverage */
+    if (S.family === "rosse" && ((S.rosAV > 0 && S.rosAV !== S.rosA) || (S.rosRV > 0 && S.rosRV !== S.rosR))) return false;   /* entry 193: Classic OS ellipticity comes from covH != covV (independent per-plane Geddes laws) -- the aspect/section check below cannot see it, so elliptical osc read as round and the CSV silently dropped the V wall */
     return S.section === "ellipse" && S.aspect === 1 && !(S.petf && PETF_FAMILIES[S.family] && (S.TaddV !== S.Tadd || S.fmultV !== S.fmult)); }
 
   /* ================= drawing ================= */
@@ -5878,6 +6262,13 @@ function mouthCorner(prof, areaOverride) {
       svg += '<line x1="' + esc(X(0)) + '" y1="' + esc(Y(rt)) + '" x2="' + esc(X(zT6)) + '" y2="' + esc(Y(rt + zT6 * tA6)) + '" stroke="var(--ink)" stroke-width="0.8" stroke-dasharray="4,3" opacity="0.55"/>' +
              '<line x1="' + esc(X(0)) + '" y1="' + esc(Y(-rt)) + '" x2="' + esc(X(zT6)) + '" y2="' + esc(Y(-(rt + zT6 * tA6))) + '" stroke="var(--ink)" stroke-width="0.8" stroke-dasharray="4,3" opacity="0.55"/>' +
              '<text x="' + esc(X(zT6) + 4) + '" y="' + esc(Y(rt + zT6 * tA6) + 3) + '" font-size="8.5" font-family="var(--mono)" fill="var(--faint)">driver ' + S.exitDeg + '\u00b0 tangent</text>';
+    }
+    if (actProf.plug) {   /* entry 237: the bullet, mirrored about the axis, hatched */
+      var bp7 = bulletProfile(actProf.plug.D, actProf.plug.L, 40, actProf.plug.shape), d7 = "";
+      for (var q7 = 0; q7 < bp7.length; q7++) d7 += (q7 === 0 ? "M" : "L") + esc(X(bp7[q7].z)) + "," + esc(Y(bp7[q7].r)) + " ";
+      for (var q8 = bp7.length - 1; q8 >= 0; q8--) d7 += "L" + esc(X(bp7[q8].z)) + "," + esc(Y(-bp7[q8].r)) + " ";
+      svg += '<path d="' + d7 + 'Z" fill="var(--faint)" fill-opacity="0.18" stroke="var(--ink)" stroke-width="0.9"/>' +
+             '<text x="' + esc(X(actProf.plug.L * 0.35)) + '" y="' + esc(Y(0) + 3) + '" text-anchor="middle" font-size="8.5" font-family="var(--mono)" fill="var(--faint)">bullet \u00d8' + fmt(actProf.plug.D, 0) + '</text>';
     }
     svg += '<text x="' + esc(X(0) + 6) + '" y="' + esc(Y(rt) - 20) + '" text-anchor="start" font-size="10" font-family="var(--mono)" fill="var(--ink)">' + (S.throatShape === "rect" && S.ribW > 0 ? "rect " + fmt(S.ribW, 1) + " \u00d7 " + fmt(S.ribH, 1) + " (\u00d8-eq " + fmt(rt * 2, 2) + ") \u2014 profiles show the rect half-widths" : "\u00d8" + fmt(rt * 2, 2) + " throat") + '</text>';
     if (!isRound()) {
@@ -6201,24 +6592,49 @@ function mouthCorner(prof, areaOverride) {
   // slow or absent -- the user pressed EXPORT, got a file, and read "Loading 3-D
   // viewer" instead of what the file contains.
   function exNote() { var e9 = document.getElementById("v3dnote"); if (e9 && e9.dataset) e9.dataset.exportNote = "1"; return e9; }
+  /* entry 238 (hornlab review: every export there auto-saves a version; ours carried
+     nothing): DESIGN PROVENANCE IN THE FILE ITSELF. designJSON() is the exact
+     Save-design payload (S, whole); designTag() a one-line human form. STEP:
+     second FILE_DESCRIPTION string; STL: the 80-byte header (build + the dials
+     that matter, never starting with "solid"); CSV: a leading # comment line;
+     AKABAK .aks: a | comment; BEM / bLab ZIPs: design.json alongside the mesh. A
+     printed horn can always be traced back to its dials. */
+  function designJSON() { return JSON.stringify({ hsDesign: 1, build: buildNo(), state: S }); }
+  function buildNo() { var b9 = document.getElementById("buildstamp"); return b9 ? ((b9.textContent.match(/build (\d+)/) || [])[1] || null) : null; }
+  function designTag() {
+    var keys = ["family", "fc", "throatD", "T0", "trunc", "covH", "covV", "f0", "rosR", "rosA", "rosAV", "aspect", "section", "flareR", "flareWrap", "plugD"], out = ["HornStudio b" + (buildNo() || "?")];
+    for (var k = 0; k < keys.length; k++) { var v = S[keys[k]]; if (v === undefined || v === null || v === "" || v === 0 || v === false) continue; out.push(keys[k] + "=" + v); }
+    return out.join(" ");
+  }
   function saveBlob(name, blob) {
     var a = document.createElement("a");
     a.href = URL.createObjectURL(blob); a.download = name; a.click(); URL.revokeObjectURL(a.href);
   }
+  function csvEOL() { return "\r\n"; }   /* entry 238: CRLF -- Excel on every platform, and RFC 4180 */
   function exportCSV(prof, name) {
-    var rows, i;
+    /* entry 238 (learned from hornlab's decSep/colSep): number + column format
+       follows the CSV selector. "dot" = 1.25 with comma columns; "comma" = 1,25
+       with semicolon columns (what DE/FR/NL Excel expects -- Hans's locale). Only
+       the CSV exports read it; solver scripts always use "." (entry 230). */
+    var de = (S.csvFmt === "comma"), sep = de ? ";" : ",", rows, i;
+    function num(v) { var s9 = v.toFixed(4); return de ? s9.replace(".", ",") : s9; }
     if (isRound()) {
-      rows = ["z_mm,r_mm"];
-      for (i = 0; i < prof.H.length; i++) rows.push(prof.H[i].z.toFixed(4) + "," + prof.H[i].r.toFixed(4));
+      rows = ["z_mm" + sep + "r_mm"];
+      for (i = 0; i < prof.H.length; i++) rows.push(num(prof.H[i].z) + sep + num(prof.H[i].r));
     } else {
-      rows = ["z_h_mm,r_h_mm,z_v_mm,r_v_mm"];
+      rows = ["z_h_mm" + sep + "r_h_mm" + sep + "z_v_mm" + sep + "r_v_mm"];
       for (i = 0; i < prof.H.length; i++)
-        rows.push(prof.H[i].z.toFixed(4) + "," + prof.H[i].r.toFixed(4) + "," + prof.V[i].z.toFixed(4) + "," + prof.V[i].r.toFixed(4));
+        rows.push(num(prof.H[i].z) + sep + num(prof.H[i].r) + sep + num(prof.V[i].z) + sep + num(prof.V[i].r));
     }
-    saveBlob(name, new Blob([rows.join("\n")], { type: "text/csv" }));
+    /* entry 238/239: NO provenance line in the CSV -- the live artifact suite (T5, a
+       script reading the file) broke on a leading # line, exactly as a user's
+       script would. The CSV stays pure numeric; provenance rides the file NAME
+       (family, fc) and every other export (STEP/STL/AKS/ZIPs carry the design). */
+    saveBlob(name, new Blob([rows.join(csvEOL())], { type: "text/csv" }));
   }
   function exportSTL(mesh, name) {
     var nt = mesh.idx.length / 3, buf = new ArrayBuffer(84 + nt * 50), dv = new DataView(buf);
+    var tag8 = designTag().slice(0, 79); for (var t8 = 0; t8 < tag8.length; t8++) dv.setUint8(t8, tag8.charCodeAt(t8) & 127);   /* entry 238: provenance in the 80-byte header */
     dv.setUint32(80, nt, true);
     var off = 84, k;
     for (k = 0; k < nt; k++) {
@@ -6266,13 +6682,13 @@ function mouthCorner(prof, areaOverride) {
   /* ================= UI ================= */
   var PARAMS = [
     { key: "fc", label: "Cut-off fc", unit: "Hz", min: 80, max: 10000, step: 5, log: 1,   /* entry 208: forum request (4-inch waveguide, fc past 2 kHz) -- LOG slider: full 80-10k range with usable resolution at both ends; typed values were never capped below 10k in this build */   /* entry 149: user request "100 Hz or less" -- all prof families verified stable at 80 */ sect: "core", fams: { jmlc: 1, jmlcell: 1, iwata: 1, swh: 1, tractrix: 1, hypex: 1, conical: 1, cd: 1, biradial: 1, wn: 1 } },
-    { key: "throatD", label: "Throat \u00d8", unit: "mm", min: 4, max: 120, step: 0.01, sect: "core" },   // entry 89: forum request, tiny horns (3 cm tractrix, 5 mm throats)
+    { key: "throatD", label: "Throat \u00d8", unit: "mm", min: 4, max: 450, step: 0.01, sect: "core" },   // entry 89: forum request, tiny horns (3 cm tractrix, 5 mm throats) // entry 234 (maxgldrr, forum #53: 8"/12" LF-MF drivers): 120 -> 200, per-family construction limits enforced in validateInputs
     { key: "ribW", label: "Rect throat W", unit: "mm", min: 0, max: 320, step: 0.5, sect: "core", fams: { jmlc: 1, jmlcell: 1, swh: 1, tractrix: 1, hypex: 1, conical: 1, cd: 1, os: 1, osc: 1, rosse: 1 } },
     { key: "ribH", label: "Rect throat H", unit: "mm", min: 0, max: 320, step: 0.5, sect: "core", fams: { jmlc: 1, jmlcell: 1, swh: 1, tractrix: 1, hypex: 1, conical: 1, cd: 1, os: 1, osc: 1, rosse: 1 } },
     { key: "ribL", label: "Throat transition length (0 = auto)", unit: "mm", min: 0, max: 300, step: 1, sect: "core", fams: { jmlc: 1, jmlcell: 1, swh: 1, tractrix: 1, hypex: 1, conical: 1, cd: 1, os: 1, osc: 1, rosse: 1 } },
     { key: "entryDeg", label: "Entry / cone angle (quasi-ell: 0 = JMLC natural)", unit: "\u00b0", min: 0, max: 30, step: 0.5, sect: "core", fams: { jmlc: 1, jmlcell: 1, conical: 1 } },
     { key: "T0", label: "T\u2080 (hypex)", unit: "", min: 0.4, max: 1.2, step: 0.01, sect: "core", fams: LAW_FAMILIES },
-    { key: "covV", label: "V coverage (\u22126 dB)", unit: "\u00b0", min: 20, max: 120, step: 5, sect: "core", fams: { cd: 1, osc: 1 } },
+    { key: "covV", label: "V coverage (\u22126 dB)", unit: "\u00b0", min: 20, max: 120, step: 5, sect: "core", fams: { cd: 1, osc: 1, os: 1 } },   /* entry 235: OS-SE per-plane */
     { key: "trunc", label: "Truncation angle", unit: "\u00b0", min: 60, max: 230, step: 1, sect: "core", fams: { jmlc: 1, jmlcell: 1, iwata: 1, swh: 1, tractrix: 1 } },
     { key: "aplat", label: "Aplatissement (mouth a/b)", unit: "", min: 1, max: 8, step: 0.1, sect: "core", fams: { jmlcell: 1 } },
     { key: "ellMu", label: "Flattening centre \u00b5 (of path)", unit: "", min: 0.1, max: 1.0, step: 0.01, sect: "core", fams: { jmlcell: 1 } },
@@ -6290,6 +6706,8 @@ function mouthCorner(prof, areaOverride) {
     { key: "fmultV", label: "V-plane: f mult (HVDiff)", unit: "\u00d7", min: 0.25, max: 6, step: 0.25, sect: "petf", fams: { jmlc: 1, swh: 1, hypex: 1 } },
     { key: "rosR", label: "R \u2014 outer radius", unit: "mm", min: 60, max: 400, step: 5, sect: "core", fams: { rosse: 1 } },
     { key: "rosA", label: "a \u2014 coverage half-angle", unit: "\u00b0", min: 20, max: 60, step: 0.5, sect: "core", fams: { rosse: 1 } },
+    { key: "rosAV", label: "a\u1d65 \u2014 V coverage half-angle (0 = same as H)", unit: "\u00b0", min: 0, max: 60, step: 0.5, sect: "core", fams: { rosse: 1 } },   /* entry 235: per-plane R-OSSE (the ATH form) */
+    { key: "rosRV", label: "R\u1d65 \u2014 V outer radius (0 = auto: equal mouth depth)", unit: "mm", min: 0, max: 400, step: 5, sect: "core", fams: { rosse: 1 } },
     { key: "rosA0", label: "a\u2080 \u2014 throat angle", unit: "\u00b0", min: 0, max: 20, step: 0.5, sect: "core", fams: { rosse: 1 } },
     { key: "rosK", label: "k \u2014 throat expansion", unit: "", min: 0.5, max: 4, step: 0.05, sect: "core", fams: { rosse: 1 } },
     { key: "rosRr", label: "r \u2014 apex radius", unit: "", min: 0.05, max: 1, step: 0.01, sect: "core", fams: { rosse: 1 } },
@@ -6299,7 +6717,7 @@ function mouthCorner(prof, areaOverride) {
     { key: "Tadd", label: "T add", unit: "", min: 0, max: 4, step: 0.05, sect: "petf", petfOnly: true },
     { key: "fmult", label: "f mult", unit: "", min: 0.1, max: 3, step: 0.05, sect: "petf", petfOnly: true },
     { key: "sOff", label: "T offset z\u2080 (from throat)", unit: "mm", min: 0, max: 500, step: 5, sect: "petf", petfOnly: true },
-    { key: "aspect", label: "H/V aspect (swh: EWF stretch)", unit: ":1", min: 1, max: 3, step: 0.05, sect: "geo", fams: { jmlc: 1, swh: 1, tractrix: 1, hypex: 1, conical: 1, os: 1, rosse: 1 } },
+    { key: "aspect", label: "H/V aspect (swh: EWF stretch)", unit: ":1", min: 1, max: 3, step: 0.05, sect: "geo", fams: { jmlc: 1, swh: 1, tractrix: 1, hypex: 1, conical: 1 } },   /* entry 235: os/rosse dropped -- their ellipticity is per-plane coverage (covV / a_V), not a stretch of the H curve */
     { key: "cornerR", label: "Corner R @ mouth", unit: "mm", min: 0, max: 150, step: 2, sect: "geo" },
     { key: "finT", label: "Fin thickness", unit: "mm", min: 4, max: 24, step: 1, sect: "geo", fams: { biradial: 1 } },
     { key: "adaptL", label: "Adapter length", unit: "mm", min: 15, max: 80, step: 1, sect: "geo", fams: { biradial: 1 } },
@@ -6312,10 +6730,15 @@ function mouthCorner(prof, areaOverride) {
     { key: "wnFinU1", label: "Fin end (u)", unit: "", min: 0.3, max: 1.0, step: 0.02, sect: "geo", fams: { wn: 1 } },
     { key: "flareWrap", label: "Roundover wrap past mouth", unit: "\u00b0", min: 0, max: 135, step: 5, sect: "geo", notFams: { iwata: 1 } },
     { key: "flareRV", label: "V roll depth (taper; 0 = full)", unit: "mm", min: 0, max: 80, step: 1, sect: "geo", fams: { wn: 1 } },   /* entry 186: per-plane rollback -- deep sides contain H while shallow top/bottom leaves the V rim near-bare at LF (the WN300ALO-style combination experiment) */   /* entry 167: wn UN-GATED -- surface-frame lip (T x R, global sign) + master-subsample fixed the entry-158/160 breakage */
-    { key: "flareR", label: "Mouth roundover R", unit: "mm", min: 0, max: 200, step: 2, sect: "geo", notFams: { jmlc: 1, iwata: 1 } },   /* entry 167: wn un-gated */ /* entry 221 (Hans): 200 mm ceiling for generous roundovers on ~1 m mouths -- roll battery verified at 200 */
+    { key: "flareR", label: "Mouth roundover R", unit: "mm", min: 0, max: 200, step: 2, sect: "geo", notFams: { jmlc: 1, iwata: 1 } },
+    /* entry 237 (maxgldrr #53 "bullet phase plug"; Marwan: printed attached to the horn): axial bullet on spokes, area-compensated walls */
+    { key: "plugD", label: "Phase plug bullet \u00d8 at throat (0 = none)", unit: "mm", min: 0, max: 400, step: 1, sect: "geo", notFams: { wn: 1, biradial: 1, iwata: 1 } },
+    { key: "plugL", label: "Bullet length (0 = auto 2\u00d7\u00d8)", unit: "mm", min: 0, max: 600, step: 5, sect: "geo", notFams: { wn: 1, biradial: 1, iwata: 1 } },
+    { key: "plugSpokes", label: "Bullet spokes (printed with the horn)", unit: "", min: 3, max: 6, step: 1, sect: "geo", notFams: { wn: 1, biradial: 1, iwata: 1 } },
+    { key: "plugSpokeT", label: "Spoke thickness", unit: "mm", min: 1, max: 8, step: 0.5, sect: "geo", notFams: { wn: 1, biradial: 1, iwata: 1 } },   /* entry 167: wn un-gated */ /* entry 221 (Hans): 200 mm ceiling for generous roundovers on ~1 m mouths -- roll battery verified at 200 */
     { key: "thick", label: "Wall thickness (3-D)", unit: "mm", min: 2, max: 12, step: 0.5, sect: "geo" },   /* entry 176: universal -- the wn gate hid the control while S.thick silently drove its shell anyway (the entry-152 iwata trap, again) */
     { key: "iwExitD", label: "Driver exit \u00d8 cut (0 = full neck)", unit: "mm", min: 0, max: 76.2, step: 0.1, sect: "geo", fams: { iwata: 1 } },
-    { key: "exitLen", label: "Driver entry L (osc/os: loading only)", unit: "mm", min: 0, max: 40, step: 1, sect: "geo", notFams: { cd: 1, wn: 1, biradial: 1, iwata: 1, rosse: 1 } },   /* entry 221: rosse hides it -- the a0 dial owns the launch; osc/os keep it as the LOADING-ONLY driver bore (entry 192) */   /* entry 192: restored for osc as a LOADING-ONLY term -- the driver internal cone enters the Webster area law behind z=0, never the exported geometry (the reporter said this info is crucial for loading; honored precisely) */
+    { key: "exitLen", label: "Driver entry L (osc/os: loading only; iwata: round-to-cut adapter, 0 = auto)", unit: "mm", min: 0, max: 40, step: 1, sect: "geo", notFams: { cd: 1, wn: 1, biradial: 1, rosse: 1 } },   /* entry 233: iwata joins -- the adapter length when a driver-exit cut is active */   /* entry 221: rosse hides it -- the a0 dial owns the launch; osc/os keep it as the LOADING-ONLY driver bore (entry 192) */   /* entry 192: restored for osc as a LOADING-ONLY term -- the driver internal cone enters the Webster area law behind z=0, never the exported geometry (the reporter said this info is crucial for loading; honored precisely) */
     { key: "exitDeg", label: "Driver exit angle (included)", unit: "\u00b0", min: 0, max: 30, step: 0.5, sect: "geo", notFams: { cd: 1, wn: 1, biradial: 1, iwata: 1, rosse: 1 } },   /* entry 219: rosse's launch angle is its own a0 dial -- a second angle control would fight it (rule 6: remove, don't disable) */
     { key: "plateT", label: "Driver plate thickness (0 = off)", unit: "mm", min: 0, max: 40, step: 0.5, sect: "geo" },
     { key: "plateD", label: "Plate outer \u00d8 (0 = auto)", unit: "mm", min: 0, max: 320, step: 1, sect: "geo" },
@@ -6363,6 +6786,15 @@ function mouthCorner(prof, areaOverride) {
       h.style.display = on ? "" : "none";
       h.textContent = on ? cornerHintText(mc, roundSection) : "";
     }
+    /* entry 238 (hornlab review): the kr=1 RADIUS at fc under the roundover dial --
+       c/(2 pi fc) -- the radius at which a lip is acoustically large at cut-off
+       (the same kr=1 convention the mouth corner uses; hornlab defaults its
+       rollback radius to it). A reference mark, not a change in geometry; only
+       where the family has an fc and the dial is shown. */
+    var hf = document.getElementById("hint_flareR");
+    if (hf && mc && S.fc > 0 && { jmlcell: 1, swh: 1, tractrix: 1, hypex: 1, conical: 1, cd: 1, biradial: 1, wn: 1 }[fam]) {
+      hf.style.display = ""; hf.textContent = "kr=1 radius at fc: c/(2\u03c0fc) = " + Math.round(344000 / (2 * Math.PI * S.fc)) + " mm \u2014 a lip of this order is acoustically large at cut-off";
+    }
   }
   var lastDirEst = null;
   var buildCurrentBEM = null;   // entry 135: shared scope (assigned in build())
@@ -6372,6 +6804,7 @@ function mouthCorner(prof, areaOverride) {
   // the config has no justified 1-D coordinate (per-azimuth HVDiff loft) -- the
   // button is then removed, per RULE 6, rather than left to emit a lie.
   var lastLEM = null;
+  var lastLoad = null;   /* entry 238: the 1-D loading corner (20% throat resistance), or "not defined" */
   // entry 96: charts render standalone so the semantic zoom re-renders ONLY the
   // charts (windowed fArr recompute), not the geometry/3-D pipeline.
   function renderCharts() {
@@ -6379,6 +6812,23 @@ function mouthCorner(prof, areaOverride) {
     var petfActive = S.petf && PETF_FAMILIES[S.family];
     var col = petfActive ? "var(--petf)" : "var(--ink)";
     var actProf = lastProf;
+    /* entry 236 (zen_tm #56, "misshapen form ... extreme setting"): FOLD AUDIT on the
+       actual H and V meridians the mesh is built from (flare stations included).
+       A wall that passes through itself is not a horn; say so, name the dials,
+       and gate the exports (exportGate confirm, like every other reported defect). */
+    lastAct.fold = null;
+    if (actProf && actProf.H) {
+      var _fH = profileFold(actProf.H), _fV = actProf.V ? profileFold(actProf.V) : null;
+      if (_fH || _fV) {
+        var _ff = _fH || _fV;
+        lastAct.fold = { plane: _fH ? "H" : "V", z: _ff.z, r: _ff.r, axis: _ff.axis,
+          hint: _ff.axis ? "the wall crosses the axis" : (actProf.baseStations && _ff.j >= actProf.baseStations ? "the mouth roll curls back through the horn body \u2014 reduce Roundover R and/or WRAP" :
+                (S.family === "rosse" ? "the R-OSSE rollback passes through the body \u2014 reduce b (bending) or raise m (apex shift) / R" :
+                (S.family === "jmlc" || S.family === "swh" || S.family === "iwata") ? "the self-rolling wall coils past itself \u2014 lower the truncation angle" : "reduce the roundover / rollback dials")) };
+        var _ebF = document.getElementById("errbox");
+        if (_ebF) { _ebF.style.display = "block"; _ebF.textContent = (_ebF.textContent ? _ebF.textContent + "\n" : "") + "GEOMETRY FOLDS THROUGH ITSELF (" + lastAct.fold.plane + " plane, z \u2248 " + fmt(_ff.z, 0) + " mm): " + lastAct.fold.hint + ". Exports require explicit override."; }
+      }
+    }
     var mxProf = null, mxMode = "axial", mxMap = null;   // entry 215: Max-SPL uses the SAME prof + coordinate as the Webster charts (one geometry source)
     document.getElementById("tchart").innerHTML = tChartSVG(lastAct, petfActive ? "var(--petf)" : "var(--base)");
     var fArr = [], nf = 90;
@@ -6445,6 +6895,36 @@ function mouthCorner(prof, areaOverride) {
     // just used. Same source as the Z / SPL / group-delay / Max-SPL plots, so the
     // script cannot drift from what the app itself shows.
     lastLEM = mxProf ? { prof: mxProf, mode: mxMode, map: mxMap } : null;
+    /* entry 238 (hornlab review, Batik's criterion): the 1-D LOADING CORNER -- the
+       frequency at which the throat acoustic resistance falls to 20% of its
+       asymptotic value. Our throatImpedance normalises so the asymptote is 1 for
+       a horn the Webster chain can describe. MEASURED (hornlab review, R-OSSE):
+       on the rollback waveguides the chain does NOT converge -- asymptote 0.835,
+       ripple +-0.76, bit-identical from 300 to 1200 stations -- so the corner is
+       printed only where the asymptote is well-defined (0.85..1.15) and the chart
+       is captioned, not trusted, where it is not (RULE 6: no number we cannot
+       defend; the HVDiff loft already gets the DISABLED panel).
+       CORRECTION found on the way (engine websterEnd): the chain had been fed the
+       curled-back lip as 1e-6 mm elements -- the R-OSSE "non-convergence" of the
+       review was the coordinate, not physics. The chain now ends at the mouth
+       plane. What still does not converge (measured: cd 80-degree final flare,
+       OS-SE / R-OSSE steep terminations, Kugelwellen) is the plane-wave staircase
+       on a near-vertical wall -- a real limit of 1-D theory, captioned as such. */
+    lastLoad = null;
+    if (mxProf && mxProf.H && mxProf.H.length > 4) {
+      var _fL = [], _nL = 96;
+      for (var _iL = 0; _iL < _nL; _iL++) _fL.push(50 * Math.pow(12000 / 50, _iL / (_nL - 1)));
+      var _zL = throatImpedance(mxProf, _fL, mxMode, mxMap), _top = _zL.slice(-20), _asym = 0, _rip = 0;
+      for (var _q = 0; _q < _top.length; _q++) _asym += _top[_q].re / _top.length;
+      for (var _q2 = 0; _q2 < _top.length; _q2++) _rip = Math.max(_rip, Math.abs(_top[_q2].re - _asym));
+      var _ok = isFinite(_asym) && _asym > 0.3 && _rip / _asym < 0.15, _f20 = null;   /* converged: top-octave ripple under 15% of the asymptote (wide cones legitimately sit below 1 in-band -- k*r_apex finite -- so no absolute window) */
+      if (_ok) { for (var _k = _zL.length - 1; _k >= 0; _k--) if (_zL[_k].re < 0.2 * _asym) { _f20 = _k + 1 < _zL.length ? _zL[_k + 1].f : _zL[_k].f; break; } if (_f20 === null) _f20 = _zL[0].f; }
+      lastLoad = { defined: _ok, f20: _f20, asym: _asym, ripple: _rip };
+      if (!_ok) {
+        var _zc = document.getElementById("zchart");
+        if (_zc) _zc.innerHTML = _zc.innerHTML.replace('</svg>', '<text x="10" y="26" font-size="9" font-family="var(--mono)" fill="var(--petf)" letter-spacing="0.04em">1-D MODEL DOES NOT CONVERGE HERE (asymptote ' + _asym.toFixed(2) + ', ripple \u00b1' + _rip.toFixed(2) + ') \u2014 shape only; use BEM</text></svg>');
+      }
+    }
     (function () {
       var _ak = document.getElementById("exAks");
       if (_ak) _ak.style.display = lastLEM ? "" : "none";
@@ -6462,9 +6942,9 @@ function mouthCorner(prof, areaOverride) {
       // rosse's design angle is the rosA dial (HALF-angle -> x2). V plateau = the H
       // plateau narrowed by the aspect stretch (atan of the scaled tangent); at
       // aspect 1 the planes are IDENTICAL by construction.
-      if (S.family === "os" || S.family === "rosse") {
+      if (S.family === "os" || S.family === "rosse") {   /* entry 235: per-plane coverage IS the V plateau now (no stretch) */
         _pH = S.family === "os" ? (S.covH || null) : (S.rosA ? 2 * S.rosA : null);
-        _pV = _pH && S.aspect > 1 ? 2 * Math.atan(Math.tan((_pH / 2) * Math.PI / 180) / S.aspect) * 180 / Math.PI : _pH;
+        _pV = S.family === "os" ? (S.covV || _pH) : (S.rosAV > 0 ? 2 * S.rosAV : _pH);
       }
       if (S.family === "wn" && lastAct.wn) {
         var _p9 = lastAct.wn.prof, _i9 = Math.round(0.62 * (_p9.a.length - 1));
@@ -6548,9 +7028,16 @@ function mouthCorner(prof, areaOverride) {
       [["flat","flat mouth plane"],["sp","spherical mouth (stereographic proj.)"]].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === S.spProj ? " selected" : "") + '>' + o[1] + "</option>"; }).join("") + '</select>';
     for (i = 0; i < PARAMS.length; i++) if (PARAMS[i].sect === "geo") {
       if (PARAMS[i].key === "flareR") side += lipSelHTML;   // entry 111: lip style directly above the mouth params
+      if (PARAMS[i].key === "plugD") side += '<div class="sect" id="plugsect">PHASE PLUG</div>' +   /* entry 237: a heading of its own (the August build's lesson: a 40th dial nobody could find) */
+        '<select class="psel" id="plugShapeSel" aria-label="Phase plug nose shape" style="margin-bottom:4px">' +
+        [["bullet", "Plug nose: tangent ogive (machined bullet)"], ["ellipse", "Plug nose: half-ellipsoid"], ["cone", "Plug nose: straight cone"]].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === (S.plugShape || "bullet") ? " selected" : "") + '>' + o[1] + "</option>"; }).join("") + "</select>" +
+        '<select class="psel" id="plugModeSel" aria-label="Phase plug mode" style="margin-bottom:4px">' +
+        [["designed", "Plug mode: DESIGNED-IN (walls opened, net area = law)"], ["retrofit", "Plug mode: RETROFIT (walls as designed; loading shows the loss)"]].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === (S.plugMode || "designed") ? " selected" : "") + '>' + o[1] + "</option>"; }).join("") + "</select>";
       side += paramHTML(PARAMS[i]);
     }
     side += '<div class="sect">EXPORT</div>' +
+      '<select class="psel" id="csvSel" aria-label="CSV number format" style="margin-bottom:4px">' +
+      [["dot", "CSV numbers: 1.25 \u00b7 columns by comma (US/UK Excel, Python)"], ["comma", "CSV numbers: 1,25 \u00b7 columns by semicolon (DE/FR/NL Excel)"]].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === (S.csvFmt || "dot") ? " selected" : "") + '>' + o[1] + "</option>"; }).join("") + "</select>" +   /* entry 238 (hornlab: decSep/colSep): a German Excel reads 1.25,2.5 as one mangled column */
       '<button class="btn" id="exCsv">PROFILE CSV (H + V)</button>' +
       '<select class="psel" id="bemTargetSel" aria-label="BEM solver target" style="margin-bottom:4px">' +
       [["akabak", "BEM target: AKABAK"], ["blab", "BEM target: Boundary Lab"]].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === (S.bemTarget || "akabak") ? " selected" : "") + '>' + o[1] + "</option>"; }).join("") + '</select>' +
@@ -6586,7 +7073,7 @@ function mouthCorner(prof, areaOverride) {
       '<main>' +
       '<div style="padding:12px 16px;border-bottom:1px solid var(--line)"><div class="eyebrow" style="margin-bottom:6px">3-D PREVIEW \u2014 DRAG ROTATE \u00b7 WHEEL ZOOM <button class="btn" id="showConstr" style="display:none;width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">SHOW CONSTRUCTION</button><button class="btn" id="dirOvBtn" style="width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">DIRECTIVITY: OFF</button><button class="btn" id="bemPrevBtn" style="width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">BEM MESH: OFF</button></div>' +
       '<div id="view3d" style="width:100%;height:380px;background:#FFFFFF;touch-action:none;cursor:grab"></div>' +
-      '<span id="buildstamp" style="font-family:var(--mono);font-size:9px;color:var(--faint);letter-spacing:0.08em">build 232 · 2026-08-03</span><div id="v3dnote" style="font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:6px;letter-spacing:.04em"></div></div>' +
+      '<span id="buildstamp" style="font-family:var(--mono);font-size:9px;color:var(--faint);letter-spacing:0.08em">build 240 · 2026-09-28</span><div id="v3dnote" style="font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:6px;letter-spacing:.04em"></div></div>' +
       '<div id="drawing" style="padding:10px 12px 0"></div>' +
       '<div class="legend" id="legend"></div><div class="stats" id="stats"></div>' +
       '<div style="padding:14px 16px 0 16px"><div class="eyebrow">REPORTS \u2014 1-D / GEOMETRIC ESTIMATES (NOT A BEM SUBSTITUTE)</div></div>' +
@@ -6661,7 +7148,7 @@ function mouthCorner(prof, areaOverride) {
       os:       { covH: 90, f0: 800, osK: 1.0, osS: 0.7, osN: 4 },
       osc:      { covH: 90, covV: 90, f0: 800, flareR: 30, flareWrap: 90 },
       wn:       { throatD: 35.56, fc: 300, T0: 0.7, wnUL: 0.5, wnUC: 0.68, wnFins: 0, wnFinT: 1.0, wnClear: 0.4, wnFinU1: 0.7, wnCovH: 70, wnCovV: 60, flareR: 40, flareWrap: 80, cornerR: 0 }, // entry 162 (user report: "make the suggested numbers the family default"): the drba-comparison reference -- fc 300, 1.4in throat, H lock 70, V 60@2k
-      rosse:    { rosR: 130, rosA: 39, rosA0: 7.5, rosK: 1.8, rosRr: 0.3, rosB: 0.3, rosM: 0.8, rosQ: 3.7 } // the ST260 paper reference
+      rosse:    { rosR: 130, rosA: 39, rosAV: 0, rosRV: 0, rosA0: 7.5, rosK: 1.8, rosRr: 0.3, rosB: 0.3, rosM: 0.8, rosQ: 3.7 } // the ST260 paper reference
     };
     var SHARED_KEEP = { fc: 1, throatD: 1, covH: 1, covV: 1, T0: 1 };   // entry 149 (user: "Please dont reset params e.g. Cut off when changing horn profile")
     function applyFamilyDefaults(force9) {
@@ -6679,7 +7166,7 @@ function mouthCorner(prof, areaOverride) {
          PER-FAMILY decisions -- carried across a family switch they silently
          corrupt the new family's throat. Reset on every family change; the
          user re-enters them deliberately if the new horn's driver needs them. */
-      ["exitDeg", "exitLen", "flareRV"].forEach(function (k0) {
+      ["exitDeg", "exitLen", "flareRV", "plugD"].forEach(function (k0) {   /* entry 237: the bullet is a per-design decision too (a 150 mm bullet carried into a 1" horn was capped to 36 mm with a warning -- seen in the live screenshot) */
         S[k0] = 0;
         var n0 = document.getElementById("num_" + k0), r0 = document.getElementById("rng_" + k0);
         if (n0) n0.value = 0; if (r0) r0.value = 0;
@@ -6715,10 +7202,10 @@ function mouthCorner(prof, areaOverride) {
          (bem*) -- those are workflow state, not design state. */
       var KEEP9 = { family: 1, bemF: 1, bemSym: 1, bemTarget: 1, bemModel: 1, bemSrc: 1, bemPrev: 1, dirOv: 1, showConstr: 1 };
       for (var rk9 in INIT_DEFAULTS) if (!KEEP9[rk9]) { S[rk9] = INIT_DEFAULTS[rk9]; syncParamInput(rk9, S[rk9]); }
-      ["exitDeg", "exitLen", "flareRV"].forEach(function (k0) { S[k0] = 0; syncParamInput(k0, 0); });
+      ["exitDeg", "exitLen", "flareRV", "plugD"].forEach(function (k0) { S[k0] = 0; syncParamInput(k0, 0); });
       applyFamilyDefaults(true);   // explicit reset, the user asked for a button instead of surprises
       S._touched = {};
-      [["throatSel", "throatShape"], ["lipSel", "lipStyle"], ["petfSel", "petfPreset"], ["sectSel", "section"]].forEach(function (sv9) {
+      [["throatSel", "throatShape"], ["lipSel", "lipStyle"], ["petfSel", "petfPreset"], ["sectSel", "section"], ["csvSel", "csvFmt"], ["plugShapeSel", "plugShape"], ["plugModeSel", "plugMode"]].forEach(function (sv9) {
         var se9 = document.getElementById(sv9[0]); if (se9 && S[sv9[1]] !== undefined) se9.value = S[sv9[1]];
       });
       var fs9r = document.getElementById("finsSel"); if (fs9r) fs9r.value = S.fins;
@@ -6773,6 +7260,9 @@ function mouthCorner(prof, areaOverride) {
     document.getElementById("bemSrcSel").addEventListener("change", function (e) {
       S.bemSrc = e.target.value;
     });
+    document.getElementById("csvSel").addEventListener("change", function (e) { S.csvFmt = e.target.value; });
+    document.getElementById("plugShapeSel").addEventListener("change", function (e) { S.plugShape = e.target.value; update(); });   /* entry 237 */
+    document.getElementById("plugModeSel").addEventListener("change", function (e) { S.plugMode = e.target.value; update(); });   /* entry 238: export-only preference, no geometry -> no update() */
     document.getElementById("bemTargetSel").addEventListener("change", function (e) {
       S.bemTarget = e.target.value;
       // entry 133: Boundary Lab solves freestanding FULL meshes -- quarter is
@@ -6842,6 +7332,8 @@ function mouthCorner(prof, areaOverride) {
       }
       if (lastAct.petfConverged === false)
         return confirm("MOUTH-REFERENCED PETF DID NOT CONVERGE (residual " + (lastAct.petfResidual || 0).toFixed(2) + " mm" + (lastAct.petfCycleDetected ? ", cycle detected" : "") + ").\nThis geometry is NOT validated.\n\nExport anyway?");
+      if (lastAct.fold)   /* entry 236: a self-intersecting meridian makes a self-intersecting solid */
+        return confirm("GEOMETRY FOLDS THROUGH ITSELF (" + lastAct.fold.plane + " plane, z \u2248 " + fmt(lastAct.fold.z, 0) + " mm): " + lastAct.fold.hint + ".\nThe solid would be self-intersecting; slicers and BEM solvers will not accept it.\n\nExport anyway?");
       if (lastAct.terminated === "fan-degenerate")   /* entry 220: the UI caps fc, but odd throat/adapter combinations can still reach this -- never export it silently */
         return confirm("YUICHI FAN DEGENERATE: the kr = 1 mouth ends inside the adapter at these settings (fc too high for this throat/adapter) -- the sectoral architecture does not exist here.\nThis geometry is NOT valid.\n\nExport anyway?");
       return true;
@@ -6854,7 +7346,7 @@ function mouthCorner(prof, areaOverride) {
       if (!exportGate()) return; if (!lastAct) return;
       var _m2 = buildStyledMesh(lastAct, 150, 48);   // coarser than STL: 7 STEP entities per triangle
       validateMesh(_m2, true);
-      saveBlob(fname("horn") + ".step", new Blob([stepFromMesh(_m2.pos, _m2.idx, fname("horn"))], { type: "text/plain" }));
+      saveBlob(fname("horn") + ".step", new Blob([stepFromMesh(_m2.pos, _m2.idx, fname("horn"), designTag() + " | " + designJSON())], { type: "text/plain" }));
       var nt7 = exNote();
       if (nt7) nt7.textContent = "STEP saved: faceted BREP, " + (_m2.idx.length / 3) + " planar faces, mm units \u00b7 (faceted = STL-fidelity in a CAD container; NURBS lofts are a future pass)";
     });
@@ -6906,13 +7398,13 @@ function mouthCorner(prof, areaOverride) {
         if (S.thick > 0) {
           var outN = offsetRings(ringsN, MN, segsN, S.thick);
           var qoN = quadLoft(outN, MN, segsN, cIdxN);
-          saveBlob(fname("nurbs_solid") + ".step", new Blob([stepFromNurbsSolidQuad(qN, qoN, "horn_solid")], { type: "text/plain" }));
+          saveBlob(fname("nurbs_solid") + ".step", new Blob([stepFromNurbsSolidQuad(qN, qoN, "horn_solid", designTag() + " | " + designJSON())], { type: "text/plain" }));
         } else {
-          saveBlob(fname("nurbs") + ".step", new Blob([stepFromNurbsQuad(qN, "horn_inner_surface")], { type: "text/plain" }));
+          saveBlob(fname("nurbs") + ".step", new Blob([stepFromNurbsQuad(qN, "horn_inner_surface", designTag() + " | " + designJSON())], { type: "text/plain" }));
         }
       } else {
         var sfN = nurbsLoft(ringsN, MN, segsN);
-        saveBlob(fname("nurbs") + ".step", new Blob([stepFromNurbs(sfN, "horn_inner_surface")], { type: "text/plain" }));
+        saveBlob(fname("nurbs") + ".step", new Blob([stepFromNurbs(sfN, "horn_inner_surface", designTag() + " | " + designJSON())], { type: "text/plain" }));
       }
       var ntN = exNote();
       if (ntN) ntN.textContent = "NURBS STEP saved: one bicubic B-spline surface (" + MN + "\u00d7" + (segsN + 1) + " interpolated), inner surface only \u2014 thicken in CAD; the faceted STEP remains for direct solids";
@@ -6951,6 +7443,7 @@ function mouthCorner(prof, areaOverride) {
 
       }
       var finM9 = (S.family === "wn" && S.wnFins > 0 && lastAct.wn) ? wnFinMesh(lastAct, S.wnFinT, S.wnClear, 0.03, S.wnFinU1) : null;
+      if (prof9 && prof9.plug) finM9 = (finM9 || []).concat([bulletMesh(prof9.plug, sz9.segs)]);   /* entry 237: the bullet body rides the fin path (floating closed rigid solid); spokes are NOT in the BEM mesh (they touch the wall) -- README says so */
       var blab9 = (S.bemTarget === "blab");
       var symReq9 = (S.bemSym === "quarter") && !rings9 && !(finM9 && finM9.length);   // entry 137: quarter allowed for bLab too (its xy mirror symmetry)
       var baffle9 = !blab9 && (S.bemModel === "baffle") && !rings9;   // entry 134: graded prof path only; bLab = closed
@@ -6983,10 +7476,12 @@ function mouthCorner(prof, areaOverride) {
             f1: S.fc ? Math.max(100, Math.round(S.fc * 0.5)) : 200,
             f2: Math.min(20000, Math.round(bp9.fMax)),
             nFreq: 48, meshFreq: Math.round(bp9.fMax),
-            quarter: bp9.sym === 2, baffle: !!cur9.baffle, mouthX: mouthX9
+            quarter: bp9.sym === 2, baffle: !!cur9.baffle, mouthX: mouthX9,
+            plug: (lastProf && lastProf.plug) ? lastProf.plug : null   /* entry 237 */
           });
           var zipA9 = makeStoreZip([
             { name: "README.txt", data: abec9.readme },
+            { name: "design.json", data: designJSON() },   /* entry 238: provenance -- reload it with LOAD DESIGN */
             { name: "solving.txt", data: abec9.solving },
             { name: "observation.txt", data: abec9.observation },
             { name: mshName9, data: mshText9 }   // mesh LAST: small files first in the listing (and in truncated captures)
@@ -7026,6 +7521,7 @@ function mouthCorner(prof, areaOverride) {
           // programmatic downloads, and Boundary Lab needs both files in the
           // same folder anyway. Store-only zip (mesh + ready-to-open project).
           var zip9 = makeStoreZip([
+            { name: "design.json", data: designJSON() },   /* entry 238 */
             { name: mshName9, data: mshText9 },
             { name: fname("blab_project") + ".blab.json", data: JSON.stringify(proj9, null, 2) }
           ]);
@@ -7048,7 +7544,7 @@ function mouthCorner(prof, areaOverride) {
       try {
         var ak7 = akabakLEM({
           prof: lastLEM.prof, mode: lastLEM.mode, sMap: lastLEM.map,
-          name: fname("horn"), family: S.family, section: S.section,
+          name: fname("horn"), family: S.family, section: S.section, tag: designTag() + " | " + designJSON(),   /* entry 238 */
           build: ((document.getElementById("buildstamp") || {}).textContent || "").replace(/^build\s*/i, ""), nSeg: 24
         });
         if (!ak7) { if (nt7) nt7.textContent = "AKABAK script export failed: the profile has no usable monotone coordinate."; return; }
@@ -7191,7 +7687,17 @@ function mouthCorner(prof, areaOverride) {
       var hvActive = S.petf && PETF_FAMILIES[S.family] && (S.TaddV !== S.Tadd || S.fmultV !== S.fmult);
       if (hvActive && (p.key === "aspect" || p.key === "flareR" || p.key === "flareWrap" || p.key === "cornerR" || p.key === "seN")) ok = false; // az-loft: per-plane PETF params ARE the shaping; rollbacks are the mouth
       if ((p.key === "ribW" || p.key === "ribH" || p.key === "ribL") && (S.family === "wn" || S.family === "biradial" || S.family === "iwata")) ok = false;   // entry 101: specialized throats
-      if (p.key === "exitDeg" && !(S.exitLen > 0) && S.family !== "osc" && S.family !== "os") ok = false;   // entry 104: sub-params follow their master; entries 192/221: EXCEPT osc and os, where the angle IS the master (it launches the waveguide from z=0)
+      if (p.key === "exitDeg" && !(S.exitLen > 0) && S.family !== "osc" && S.family !== "os") ok = false;
+      if (p.key === "exitDeg" && S.family === "iwata") ok = false;
+      if ((p.key === "plugD" || p.key === "plugL" || p.key === "plugSpokes" || p.key === "plugSpokeT") && S.throatShape === "rect") ok = false;   // entry 237: a bullet is an axisymmetric object -- meaningless in a ribbon slot (rule 6: removed)
+      if ((p.key === "plugL" || p.key === "plugSpokes" || p.key === "plugSpokeT") && !(S.plugD > 0)) ok = false;   // entry 237 (rule 6): no bullet, no bullet dials
+      if (p.key === "plugD") {   // the heading and the two selects follow the master dial's own family visibility; the selects also need a bullet
+        var _ps = document.getElementById("plugsect"), _s1 = document.getElementById("plugShapeSel"), _s2 = document.getElementById("plugModeSel");
+        if (_ps) _ps.style.display = ok ? "" : "none";
+        if (_s1) _s1.style.display = (ok && S.plugD > 0) ? "" : "none";
+        if (_s2) _s2.style.display = (ok && S.plugD > 0) ? "" : "none";
+      }   // entry 233: the adapter launches tangent to the driver bore -- no angle to set
+      if (p.key === "exitLen" && S.family === "iwata" && !(S.iwExitD > 0)) ok = false;   // entry 233 (rule 6): no cut, no adapter   // entry 104: sub-params follow their master; entries 192/221: EXCEPT osc and os, where the angle IS the master (it launches the waveguide from z=0)
       if ((p.key === "plateD" || p.key === "boltN" || p.key === "boltCircleD" || p.key === "boltHoleD" || p.key === "boltRot") && !(S.plateT > 0)) ok = false;
       if ((p.key === "ribW" || p.key === "ribH") && S.throatShape !== "rect") ok = false;   // entry 93: the toggle drives them
       if (p.key === "ribL" && S.throatShape === "round") ok = false;
@@ -7275,6 +7781,41 @@ function mouthCorner(prof, areaOverride) {
         msgs.push("ribbon " + S.ribW + "\u00d7" + S.ribH + " mm = throat \u00d8 " + eqD9.toFixed(1) + " equivalent \u2014 current \u00d8 " + S.throatD + " differs; the morph blends smoothly, but set \u00d8 " + eqD9.toFixed(1) + " for area continuity with the law");
     }
     if (S.family === "tractrix" && S.trunc > 89) { syncKey("trunc", 89); msgs.push("tractrix truncation capped at 89\u00b0 (walls reach 90\u00b0 at the natural mouth)"); }
+    /* entry 234 (maxgldrr, forum #53: "increase the maximum throat opening beyond
+       120 mm ... 12" and 8" LF/MF drivers ... around 200 mm"): the dial now runs to
+       200. Every family was swept at 120/150/200 mm x fc 100-250 (watertight solids,
+       finite walls). What DOES break is large throat x HIGH fc, at measured
+       construction boundaries, each caught here rather than left to draw a
+       one-station wall:
+       - hypex / tractrix / conical: the kr = 1 mouth radius c/(2 pi fc) must exceed
+         the throat (hypex/tractrix returned a 1-2 station wall at 200 mm / 600 Hz);
+       - jmlc / jmlcell / swh: the natural entry angle sin(th0) = rt*m*T/2 must stay
+         below 1 (jmlc hit "flare-limit" with 2 stations at 200 mm / 1200 Hz);
+       - wn: the mu-linear coefficient laws give a NEGATIVE mouth depth at
+         mu = 2rt/lambda > ~0.215 (NaN rings at 200 mm / 375 Hz); capped at 0.20 --
+         still far outside the verified [0.031, 0.044] interval, and the stats
+         line keeps saying EXTRAPOLATED. Throat is clamped (synced, never silent),
+         fc is left alone: the throat is what the user just raised. */
+    var rtA = (S.throatShape === "rect" && S.ribW > 0 && S.ribH > 0) ? Math.sqrt(S.ribW * S.ribH / Math.PI) : S.throatD / 2;
+    if (S.plugD > 0 && S.throatShape === "rect") { syncKey("plugD", 0); msgs.push("phase plug removed \u2014 a bullet is axisymmetric; it has no meaning in a rectangular throat"); }   /* entry 237 */
+    if (S.plugD > 0 && S.family !== "wn" && S.family !== "biradial" && S.family !== "iwata") {   /* entry 237: the bullet must leave an annulus at the throat */
+      var rtMin = (S.throatShape === "rect" && S.ribW > 0 && S.ribH > 0) ? Math.min(S.ribW, S.ribH) / 2 : S.throatD / 2;
+      var dMax = Math.floor(2 * (rtMin - Math.max(4, 2 * (S.plugSpokeT || 3))) * 10) / 10;
+      if (dMax < 4) { syncKey("plugD", 0); msgs.push("phase plug removed \u2014 the throat is too small to leave an annulus around a bullet"); }
+      else if (S.plugD > dMax) { syncKey("plugD", dMax); msgs.push("bullet \u00d8 capped at " + dMax + " mm (throat minus room for the spokes)"); }
+    }
+    if (S.family === "wn") {
+      var lamW = 344000 / S.fc, muW = 2 * rtA / lamW;
+      if (muW > 0.2) { var dW = Math.floor(0.2 * lamW * 100) / 100; syncKey("throatD", dW); msgs.push("WN throat capped at \u00d8 " + dW.toFixed(1) + " mm for fc " + S.fc + " Hz (2r/\u03bb = 0.20) \u2014 beyond it the reference-mouth laws give a negative mouth depth (already far outside the verified \u03bc interval)"); }
+    }
+    if (S.family === "hypex" || S.family === "tractrix") {
+      var rMh = 344000 / (2 * Math.PI * S.fc);
+      if (rMh <= rtA + 1) { msgs.push("REJECTED: " + S.family + " kr = 1 mouth radius (" + rMh.toFixed(1) + " mm) would not exceed the throat \u2014 raise the throat\u2019s fc limit by lowering fc (below " + Math.floor(344000 / (2 * Math.PI * (rtA + 1))) + " Hz) or shrink the throat"); return { ok: false, msgs: msgs }; }
+    }
+    if (S.family === "jmlc" || S.family === "jmlcell" || S.family === "swh") {
+      var mJ = 4 * Math.PI * S.fc / 344000, sJ = rtA * mJ * (S.T0 || 0.7) / 2;
+      if (sJ >= 0.95) { msgs.push("REJECTED: throat too large for this fc and T \u2014 the natural entry angle sin\u03b8\u2080 = r\u209c\u00b7m\u00b7T/2 = " + sJ.toFixed(2) + " (must stay below 1); lower fc below " + Math.floor(0.95 * 344000 / (2 * Math.PI * rtA * (S.T0 || 0.7))) + " Hz, reduce T, or shrink the throat"); return { ok: false, msgs: msgs }; }
+    }
     if (S.family === "conical") {
       var rM9 = 344000 / (2 * Math.PI * S.fc), rt9 = S.throatD / 2;
       if (rM9 <= rt9 + 1) { msgs.push("REJECTED: conical mouth (" + rM9.toFixed(1) + " mm) would not exceed the throat \u2014 raise fc or shrink the throat"); return { ok: false, msgs: msgs }; }
@@ -7430,7 +7971,7 @@ function mouthCorner(prof, areaOverride) {
     var i;   // entry 96: the extracted chart block took update()'s declaration with it
     var Lz = 0; for (i = 0; i < actProf.H.length; i++) Lz = Math.max(Lz, actProf.H[i].z, actProf.V[i].z);
     var st = statHTML("Length", fmt(Lz) + " mm");
-    if (S.family === "iwata" && lastAct.iwThroatR) st += statHTML(lastAct.iwCutD > 0 ? "Driver exit cut" : "Throat \u00d8 (fixed by geometry)", lastAct.iwCutD > 0 ? ("\u00d8 " + fmt(lastAct.iwCutD, 1) + " mm area-equiv \u00b7 rim " + fmt(2 * lastAct.wall[0].r, 1) + "\u00d7" + fmt(2 * lastAct.wallV[0].r, 1) + " mm (H\u00d7V) \u00b7 neck removed " + fmt(lastAct.iwCutZ, 0) + " mm") : (fmt(lastAct.iwThroatR * 2, 1) + " mm \u00b7 1\u2033 at fc 320 \u00b7 saw the neck at your driver: Driver exit \u00d8 cut"));   /* entry 217: the uncut state names the control (forum: "why cant we modify the throat diameter") */
+    if (S.family === "iwata" && lastAct.iwThroatR) st += statHTML(lastAct.iwCutD > 0 ? "Driver exit cut + adapter" : "Throat \u00d8 (fixed by geometry)", lastAct.iwCutD > 0 ? ("round \u00d8 " + fmt(2 * lastAct.iwExitR, 1) + " at the driver face \u2192 " + fmt(lastAct.iwAdaptL, 1) + " mm area-monotone adapter \u2192 cut section \u00d8 " + fmt(lastAct.iwCutD, 1) + " area-equiv, rim " + fmt(2 * lastAct.wall[14].r, 1) + "\u00d7" + fmt(2 * lastAct.wallV[14].r, 1) + " mm (H\u00d7V) \u00b7 neck removed " + fmt(lastAct.iwCutZ, 0) + " mm")   /* entry 233 (forum #47: the gap) */ : (fmt(lastAct.iwThroatR * 2, 1) + " mm \u00b7 1\u2033 at fc 320 \u00b7 saw the neck at your driver: Driver exit \u00d8 cut"));   /* entry 217: the uncut state names the control (forum: "why cant we modify the throat diameter") */
     st += isRound() ? statHTML("Mouth \u00d8", fmt(lastH.r * 2) + " mm")
                     : statHTML("Mouth W \u00d7 H", fmt(lastH.r * 2) + " \u00d7 " + fmt(lastV.r * 2) + " mm");
     st += statHTML("Depth (max z)", fmt(lastAct.axialDepth !== undefined ? lastAct.axialDepth : lastAct.sEnd) + " mm");
@@ -7458,6 +7999,26 @@ function mouthCorner(prof, areaOverride) {
       + ((S.family === "rosse" || S.family === "os" || S.family === "osc")
          ? " · this family has NO fc dial — " + (S.family === "rosse" ? "R (outer radius)" : "coverage + throat") + " is the low-frequency handle"
          : ""));
+    /* entry 238 (hornlab review): WHICH END LIMITS THE LOW END. For the fc families the
+       design flare fc and the mouth's kr=1 corner are two different numbers; the
+       larger one wins. Say which, and what dial moves it. No new formula -- a
+       comparison of two numbers the app already prints. */
+    var _fcFam = { jmlc: 1, jmlcell: 1, iwata: 1, swh: 1, tractrix: 1, hypex: 1, conical: 1, cd: 1, biradial: 1, wn: 1 }[S.family];
+    if (_mc && _fcFam && S.fc > 0) {
+      var _mouthLim = _mc.kr1 > S.fc * 1.05, _flareLim = _mc.kr1 < S.fc * 0.95;
+      st += statHTML("Low-end limit", "flare fc " + Math.round(S.fc) + " Hz vs mouth kr=1 " + Math.round(_mc.kr1) + " Hz \u2192 "
+        + (_mouthLim ? "MOUTH-limited: the mouth is too small to support fc (pattern control and loading both fall away above fc) \u2014 make the mouth larger (lower truncation / bigger roundover / longer horn) or raise fc"
+          : _flareLim ? "FLARE-limited: the mouth already supports below fc \u2014 fc sets the low end; the extra mouth buys pattern control, not loading"
+          : "balanced: mouth corner and flare fc coincide"));
+    }
+    if (lastLoad) st += statHTML("1-D loading corner (20 % throat resistance)", lastLoad.defined
+      ? Math.round(lastLoad.f20) + " Hz \u00b7 asymptote " + lastLoad.asym.toFixed(2) + ", top-octave ripple \u00b1" + lastLoad.ripple.toFixed(2) + " \u2014 Bat\u00edk\u2019s criterion on the Webster chain; the frequency below which the throat sees less than 20 % of its passband resistance"
+      : "NOT DEFINED \u2014 the Webster chain does not converge for this geometry (asymptote " + lastLoad.asym.toFixed(2) + ", ripple \u00b1" + lastLoad.ripple.toFixed(2) + "): a plane-wave chain reads the rollback / abrupt mouth as a reflector; the loading chart is a shape only \u2014 use BEM (the mouth kr=1 corner above is the defensible number)");
+    if ((S.family === "jmlc" || S.family === "jmlcell") && S.fc > 0) {   /* entry 238: the natural entry angle, closed form (entry 88: sin th0 = rt*m*T/2, validated 27.5518 deg against his axial sheet) */
+      var _rtN = (S.throatShape === "rect" && S.ribW > 0 && S.ribH > 0) ? Math.sqrt(S.ribW * S.ribH / Math.PI) : S.throatD / 2;
+      var _sN = _rtN * (4 * Math.PI * S.fc / 344000) * (S.T0 || 0.7) / 2;
+      if (_sN < 1) st += statHTML("Natural entry half-angle \u03b8\u2080", (Math.asin(_sN) * 180 / Math.PI).toFixed(2) + "\u00b0 \u2014 sin \u03b8\u2080 = r\u209c\u00b7m\u00b7T/2, intrinsic to throat, fc and T (Le Cl\u00e9ac\u2019h: one opening angle per throat/fc/T)" + (S.entryDeg > 0 ? " \u00b7 you dialed " + S.entryDeg + "\u00b0 (conical seed)" : ""));
+    }
     // ROUNDOVER-INERT VISIBILITY (2026-07-13, user report: sliders felt dead): families whose
     // wall terminates already rolled (jmlc/swh at high truncation) leave no sweep for the
     // mouth roundover -- 90 + wrap must EXCEED the wall exit angle to add anything. Say so.
@@ -7468,6 +8029,8 @@ function mouthCorner(prof, areaOverride) {
       if (S.flareWrap <= 0.5 && _exitDeg > 92)
         st += statHTML("Roundover INACTIVE at wrap 0", "this wall already rolls itself to " + _exitDeg.toFixed(0) + "\u00b0 \u2014 WRAP now adds roll PAST the natural end: any wrap > 0 activates the roundover (R sets the lip radius)");
     }
+    if (actProf && actProf.plug) st += statHTML("Phase plug (bullet on spokes)", "\u00d8 " + fmt(actProf.plug.D, 1) + " \u00d7 L " + fmt(actProf.plug.L, 0) + " mm " + ({ bullet: "tangent-ogive", ellipse: "half-ellipsoid", cone: "conical" }[actProf.plug.shape] || "") + " nose, base in the throat plane \u00b7 " + actProf.plug.spokes + " spokes \u00d7 " + actProf.plug.spokeT + " mm, printed with the horn \u00b7 " + (actProf.plug.compensated ? "DESIGNED-IN: walls opened up to +" + fmt(actProf.plug.maxDr, 1) + " mm (\u00d7" + actProf.plug.maxScale.toFixed(3) + ") so NET area follows the law" : "RETROFIT: walls as designed, the bullet takes " + fmt(100 * actProf.occl[0] / (actProf.occl[0] + sectionArea(actProf.seNArr ? "sellipse:" + actProf.seNArr[0] : actProf.shape, actProf.H[0].r, actProf.V[0].r, actProf.rhoArr ? actProf.rhoArr[0] : actProf.rho) - actProf.occl[0]), 0) + " % of the throat area") + " \u2014 loading charts read the net area \u00b7 STL/faceted STEP carry bullet + spokes; BEM ZIP carries the bullet (rigid) but NOT the spokes; the NURBS STEP is the horn surface only \u00b7 path-length / directivity effects are NOT quantified (needs the cone geometry + BEM)");   /* entry 237 */
+    if (lastAct.fold) st += statHTML("\u26a0 GEOMETRY FOLDS THROUGH ITSELF", lastAct.fold.plane + " plane at z \u2248 " + fmt(lastAct.fold.z, 0) + ", r \u2248 " + fmt(lastAct.fold.r, 0) + " mm \u2014 " + lastAct.fold.hint + " (entry 236)");
     if (lastAct.entryDominatedLen > 1)
       st += statHTML("Entry-dominated region", fmt(lastAct.entryDominatedLen) + " mm (seed cone > law; wavefront held until the law catches up \u2014 by design)");
     var _warnD = (lastAct.diagnostics || []).filter(function (dq) { return dq.severity === "warn"; });
@@ -7544,6 +8107,17 @@ function mouthCorner(prof, areaOverride) {
         "\u00b1" + _fl.angles.filter(function(g){return g>0;}).map(function(g){return fmt(g,1);}).join("/\u00b1") + "\u00b0 \u00b7 blades z " + fmt(_bz0) + "\u2192" + fmt(_bz1) + " (actual, per-fin varies)");
       st += statHTML("Sidewall (piecewise)", "circle R " + fmt(lastAct.arc.R) + ", tangent " + fmt(lastAct.arc.startDeg,1) + "\u00b0\u2192" + fmt(lastAct.arc.junctionDeg,1) + "\u00b0 at the wing join z=" + fmt(lastAct.arc.junctionZ) + "; wings flat to apex (intentional junction, NOT tangent-continuous)"); }
     if (S.family === "os") st += statHTML("OS f\u2091 (0.2R\u2090)", (0.2 * 344000 * Math.sin(Math.min(70, Math.max(15, S.covH / 2)) * Math.PI / 180) / (Math.PI * S.throatD / 2)).toFixed(0) + " Hz");
+    /* entry 235 (kodomo #54, exprymer #55): per-plane OS-SE / R-OSSE readouts --
+       which plane set the length, and the pattern-control corner each plane
+       actually ACHIEVES (Keele: f = 2.54e7 / (coverage x mouth size)). */
+    if (S.family === "os" && lastAct.osPlanes && lastAct.wallV) {
+      var _op = lastAct.osPlanes;
+      st += statHTML("Per-plane OS-SE", "H: a=" + (_op.covH / 2).toFixed(1) + "\u00b0 from " + fmt(2 * _op.r0H, 1) + " mm \u00b7 V: a=" + (_op.covV / 2).toFixed(1) + "\u00b0 from " + fmt(2 * _op.r0V, 1) + " mm \u00b7 L " + fmt(lastAct.sEnd) + " mm set by the " + (_op.LV > _op.LH ? "V" : "H") + " plane (H alone " + fmt(_op.LH) + ", V alone " + fmt(_op.LV) + ") \u00b7 pattern control achieved: H to " + Math.round(_op.f0H) + " Hz, V to " + Math.round(_op.f0V) + " Hz (Keele)");
+    }
+    if (S.family === "rosse" && lastAct.rosPlanes) {
+      var _rp = lastAct.rosPlanes;
+      st += statHTML("Per-plane R-OSSE", "H: a=" + _rp.a + "\u00b0, R " + fmt(_rp.R) + " from " + fmt(2 * _rp.r0H, 1) + " mm \u00b7 V: a\u1d65=" + _rp.aV + "\u00b0, R\u1d65 " + fmt(_rp.RV, 1) + " mm " + (_rp.solvedRV ? "(solved: equal mouth depth " + fmt(_rp.depthV, 1) + " mm, rim planar)" : "(dialed \u2014 rim NON-planar: V plane " + (_rp.rimDz >= 0 ? "+" : "") + fmt(_rp.rimDz, 1) + " mm deeper than H)") + " from " + fmt(2 * _rp.r0V, 1) + " mm \u00b7 both planes are the pure published curve");
+    }
 
     document.getElementById("stats").innerHTML = st;
     var _fcnt = document.getElementById("tbFamCount"); if (_fcnt) _fcnt.textContent = String(Object.keys(FAMILY_MATH).length + 1); // 11 families (swh covers ewf via aspect; +wn... count from the family select)
@@ -7620,6 +8194,7 @@ function mouthCorner(prof, areaOverride) {
       var _wf = wnFinMesh(horn, S.wnFinT, S.wnClear, 0.03, S.wnFinU1);
       if (_wf && _wf.length) mesh = mergeMeshes([mesh].concat(_wf));
     }
+    if (prof.plug) { var _pm = plugMeshes(prof, segs, S.thick); if (_pm.length) mesh = mergeMeshes([mesh].concat(_pm)); }   /* entry 237: bullet + spokes, closed solids merged like the fins */
     // entry 104: DRIVER MOUNTING PLATE -- solid-mesh families only (interior
     // surfaces are the acoustic export; the rule hides the params there).
     if (S.plateT > 0) {   /* entry 176: plate universal, ALL families (generic prof.H/prof.V bore; entry 152 already re-included iwata -- the sawed exit accepts a plate) */

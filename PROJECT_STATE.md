@@ -4420,3 +4420,330 @@ shipped compacts, scale f0/f0V by 25/20 (e.g. 625/2500 instead of 500/2000). Asp
     3 specifics learned this round: keep BEM elements under ~5000,
     driver alignment is by mesh TAG NUMBER.
     263 checks, fuzz clean, artifact suite ALL PASS.
+
+231. (LIVE MOUTH-CORNER READOUT, 2026-08-03, Marwan: "ok you need to show
+    the number as the adjustments change" -- after the 1 kHz R-OSSE sizing
+    question.) mouthCorner(prof, areaOverride) in the engine: the kr=1
+    corner DERIVED from the ACTUAL last station of the ACTUAL profile the
+    charts use (entry 215, one geometry source), by AREA so it holds for
+    ellipse / superellipse / rrect; xoverMin = 2*kr1 reported as ADVISORY.
+    Printed for EVERY family in the stats panel (before: only cd-rrect and
+    biradial). R-OSSE / OS-SE / classic OS are labelled "NO fc dial -- R
+    (or coverage + throat) is the low-frequency handle". Commit a643ebf.
+    [Entry reconstructed 2026-09-28 from the session record: the GitHub
+    PROJECT_STATE was pushed without 231/232 while index.html carried
+    build 232; the mouthCorner block ALSO lived only in the embedded copy
+    (rule-1 drift) and is now back in engine.js, and rebuild.py --
+    missing from the repo -- was rewritten and verified to reproduce the
+    shipped index.html byte-for-byte apart from the stamp.]
+
+232. (CORNER HINT UNDER THE DIAL, 2026-08-03, Marwan: "Did you add the
+    cutoff next to the size?") paintCornerHints(_mc, family, isRound):
+    the SAME _mc number printed under the dial that moves it (R for
+    R-OSSE, coverage/throat for OS) -- one source, two places, so they
+    can never disagree. RULE 6: omitted (never NaN) where the corner is
+    not defensible. [Reconstructed entry, see 231.]
+
+233. (IWATA DRIVER ADAPTER, 2026-09-28, flutter_happier on the forum #47:
+    "I just sent the iwata to the printer, i had to fill the gap induced
+    by the modified throat value (in horn studio at 400hz fc and 2"
+    throat). Maybe its a quick fix?") DIAGNOSIS, measured: at the 2-inch
+    cut the Iwata section is already 64 x 37 mm (H x V) and the
+    streamlines cross the saw plane at different z (1.6 mm spread). A
+    round O50.8 driver exit therefore sat INSIDE the wall on the V axis
+    (r 18.5) and OUTSIDE it on the H axis (r 31.8) -- that is the gap.
+    Second finding: the stats called the cut "area-equiv" while
+    iwataCutRow matched the MEAN of the 19 streamline radii; at the 2"
+    cut that section had 9% LESS area than the driver exit.
+    FIX: (1) iwataCutRow picks the row by true section area (quarter-
+    polygon shoelace x 4), so "area-equiv" is now true. (2) DRIVER
+    ADAPTER: with a cut active the horn starts at a round, planar ring of
+    exactly the requested exit diameter (z = 0, the driver face) and
+    lofts into the cut section over iwAdaptL (Driver entry L dial when
+    set, else 0.8 x cut radius, min 10 mm): per-azimuth cubic Hermite in
+    r over a linear z ramp, tangent to the driver bore at the face and to
+    each streamline at the cut; then each adapter ring is scaled radially
+    so the section area runs LINEARLY from exit area to cut area (the raw
+    Hermite product dipped 5-8% because H expands while V contracts).
+    The factors are computed once on a 64-azimuth loft (buildIwataRings
+    factorsOnly) and shared with the meridians, so rings (STEP/NURBS),
+    profOf meridians (STL/BEM/drawing) and stats agree. The V axis does
+    contract (25.4 -> 18.5 mm): a round exit into an elongated Iwata
+    section MUST -- that is the physical adapter every Iwata build needs.
+    UI: exitLen re-admitted for iwata (label says round-to-cut adapter,
+    0 = auto), hidden without a cut (rule 6); exitDeg stays hidden (the
+    adapter launches tangent to the bore, no angle to set). Stats line
+    "Driver exit cut + adapter" gives exit O, adapter L, cut O (area-
+    equiv) and the H x V rim AT THE CUT (wall[14]). Solid mesh with the
+    adapter validates watertight. Pin added; the entry-221 exitLen
+    family-list regex updated (iwata admitted, rosse still excluded).
+    Also this session: triodehunter's #46 (entry-L discontinuities on
+    OS-SE / R-OSSE) re-measured -- exitLen leaves os/rosse geometry
+    bit-identical at 0/10/25/40 mm (entries 219/221 hold); no change.
+
+234. (THROAT DIAL TO 200 mm, 2026-09-28, maxgldrr on the forum #53: "increase
+    the maximum throat opening beyond 120 mm ... 12" and 8" LF/MF drivers,
+    so I'd need to go up to around 200 mm"; Marwan 2026-08-21: "it does
+    break on the William Neile -- maybe different horn types could have a
+    maximum throat size".) Dial max 120 -> 200. MEASURED before shipping:
+    every profile family at 120/150/200 mm x fc 100/150/250 builds a
+    finite, watertight solid; wn and biradial rings finite. What breaks
+    is large throat x HIGH fc, at construction boundaries, now caught in
+    validateInputs instead of drawing a 1-2 station wall:
+    - WN: the mu-linear zm law (0.3205 - 1.7388(mu - mu0)) crosses zero at
+      mu = 2rt/lambda ~ 0.215 -> negative mouth depth -> NaN rings (200 mm
+      at 375 Hz and up). Engine floors mu at 0.20 (prof.muClamped) so no
+      caller can get NaN; the app clamps throatD to 0.2*lambda for the
+      current fc (synced via syncKey, message shown). The stats line still
+      says EXTRAPOLATED (verified interval is [0.031, 0.044]).
+    - hypex / tractrix: kr=1 mouth radius must exceed the throat
+      (REJECTED with the fc below which it works), same rule conical had.
+    - jmlc / jmlcell / swh: natural entry sine rt*m*T/2 must stay < 0.95
+      (jmlc "flare-limit" 2-station wall at 200 mm / 1200 Hz).
+    OS-SE / classic OS / R-OSSE / CD are fc-free or Keele-sized: fine at
+    any fc. Pin added (10 families watertight at 200 mm, WN floor, rules).
+
+235. (PER-PLANE OS-SE / R-OSSE -- THE ATH FORM, 2026-09-28. kodomo on the
+    forum #54: SA8535 ribbon, "actual aperture approximately 48.6 x 166 mm
+    ... combining this throat with strongly asymmetric H/V coverage targets,
+    for example around 70 H x 40-50 V, using OSSE/R-OSSE ... the transition
+    from the throat into the main waveguide develops what looks like a long
+    near-parallel/straight section along the tall dimension, followed by a
+    rather abrupt flare ... like a pedestal or tower ... Changing the throat
+    transition length, even quite substantially, does not seem to eliminate
+    this"; exprymer #55: "more ATH options"; and the hornlab.io review of
+    this same day, whose one real capability gap was exactly this.)
+    ROOT CAUSE, MEASURED (kodomo's numbers, OS-SE 70 x 45 at f0 1600): the V
+    plane was the H curve STRETCHED by the aspect dial, launched from the
+    area-equivalent round throat (r 25.3), and the entry-229 ribbon morph
+    then had to Z-SHIFT that wall to reach the 83 mm half-height: r(z) =
+    wall(z + zS(1-e)) squeezes the slope to ~15% of native mid-blend and
+    catches up at the end. The V wall sat at slope 0.000 for 149 of 154
+    body stations, then jumped at slope 6.5. That IS the pedestal, and no
+    transition length can remove it -- the construction was wrong for the
+    case, not tuned wrong.
+    FIX -- per-plane construction, the ATH form of the same published
+    formulae (no new physics, no new source):
+    * OS-SE (osseWall): each principal plane runs Batik's formula (5) with
+      ITS OWN throat half-aperture (W/2, H/2 from a rect throat; rt for a
+      round one) and ITS OWN coverage half-angle (covH / covV); a0, k, s,
+      n, q shared. ONE length L = max(L_H, L_V), each solved so its plane
+      reaches the Keele size for f0 -- the dial promises pattern control
+      to f0, so it is honoured in BOTH planes (the taller V mouth this
+      implies is the physics kodomo already acknowledged). Stats say which
+      plane set L and the corner each plane ACHIEVES (Keele, f = 2.54e7 /
+      (coverage x mouth size)). covV dial admitted to os (the rule osc has
+      had since entry 193 -- SHARED_KEEP carries it across families, so a
+      cd 90x40 becomes an os 90x40, by design; the 229 pin updated).
+    * R-OSSE (rosseWall, curve factored into rosseCurve): H plane = the
+      published curve with (r0H, R, a); V plane with (r0V, R_V, a_V); a0,
+      k, r, b, m, q shared. New dials a_V (0 = same as H) and R_V (0 =
+      SOLVED by bisection on x_max so the V rollback reaches the same mouth
+      depth as H -> planar rim, both curves pure; dialed R_V keeps both
+      curves pure and the rim is then non-planar by x_max,V - x_max,H,
+      reported). Planes paired by t; the ring builder's cos^2 z-blend
+      handles the differing z (the same mechanism hornlab uses).
+    * Classic OS (osWall): per-plane throat apertures too (it had per-plane
+      coverage since 2026-07-13).
+    * hornParams passes rtH / rtV for a rect throat; profOf routes os /
+      rosse with wallV through planeProfilesWN like osc; the ribbon morph
+      still runs after it but is now the IDENTITY on the walls (targets
+      equal the launches) and only supplies the section-exponent blend
+      (rect-ish 10 -> body shape over the transition length).
+    * aspect dial REMOVED for os / rosse (rule 6: their ellipticity is
+      per-plane coverage, not a stretch of the H curve) and neutralized in
+      profOf so hidden state cannot act. Beamwidth estimate reads the
+      per-plane coverage. A saved os/rosse design that used aspect > 1
+      must set covV / a_V instead -- deliberate, the stretch was the bug.
+    MEASURED after: kodomo's case -- V slope max 0.48 (body), monotone,
+    both apertures exact (24.3 / 83.0), L 160 mm set by the V plane (H
+    alone 96), mouth 369 x 353, pattern control H to 982 Hz / V to 1600.
+    Symmetric os and rosse BIT-IDENTICAL to build 234 (pinned: L
+    122.0815..., mouth r 176.3888...; rosse mouth r 130 exactly). R_V
+    solve: a_V 25 -> R_V 76.63, rim dz 0.001 mm; V plane equals the pure
+    curve to 1e-9. Rect-throat solid watertight. DOM-driven check through
+    the real handlers (family, throat selector, ribW/ribH/covH/covV/f0,
+    rosAV) reads the new stats back with a clean errbox.
+    Picture: kodomo_before_after.png (repo) -- left the pedestal, right
+    the per-plane flare.
+
+236. (FOLD AUDIT, 2026-09-28, zen_tm on the forum #56, with a screenshot of a
+    mouth roll curled back through the horn body: "I'm thinking this
+    misshapen form probably isn't meant to happen, even if this is an
+    extreme setting".) The settings are unreadable in his thumbnail, so the
+    fix is GENERIC: profileFold(P) in the engine -- does the (z, r)
+    meridian cross itself (segment-segment over all non-adjacent pairs,
+    bbox-rejected, < 50k tests) or cross the axis (r < 0)? Family-blind and
+    dial-blind: any combination that makes the wall pass through itself
+    trips it. Random-dial search (600 configs) shows the two real modes:
+    a large roundover R x wrap on a self-rolling wall (swh/jmlc at high
+    truncation) cutting back through the body, and a lip coming around
+    through the AXIS (R comparable to the mouth radius). The app runs it on
+    the ACTUAL H and V meridians every update (flare stations included):
+    stats line "GEOMETRY FOLDS THROUGH ITSELF" with plane, z, r and the
+    dial to move (roll R/wrap; R-OSSE b/m/R; truncation for self-rolling
+    walls), the same in the errbox, and exportGate demands an explicit
+    override (the solid would be self-intersecting -- slicers and BEM
+    solvers reject it). Pinned: engine crossing case (swh trunc 200, R
+    140, wrap 135 -> z 132) and axis case, a clean roll null, synthetic
+    crossing, and the DOM path through the real dials with the errbox and
+    stats read back, then cleared.
+
+237. (BULLET PHASE PLUG, 2026-09-28, maxgldrr on the forum #53: "would it be
+    possible to add an option for a bullet phase plug?" for the 8"/12"
+    LF-MF cone-driver horns the 200 mm throat (entry 234) now allows;
+    Marwan 2026-08-21: "our phase plug should be printed in a way that is
+    attached to the horn and not the driver".)
+    WHAT IT IS: an AXIAL BULLET -- body of revolution on the horn axis,
+    flat base in the throat plane (z = 0), elliptical nose to the tip at
+    z = L (the Altec / JBL / Klipsch form) -- carried by N thin radial
+    SPOKES from the bullet into the horn wall, printed as one part with the
+    horn. Dials: bullet O (0 = none), length (0 = auto 2 x O), spokes 3-6,
+    spoke thickness; sub-dials follow the master (rule 6); profile families
+    only (wn / biradial / iwata keep their specialized throats).
+    WHAT THE TOOL CLAIMS, AND NOT: the bullet occludes area, so the walls
+    are OPENED per station so that NET area (wall minus bullet) follows the
+    design law -- plugApply scales a, b (and the corner radius) by
+    sqrt((A + pi rb^2)/A) inside the bullet; prof.occl carries the occluded
+    area and hornResponse / throatImpedance / hornMaxSPL / akabakLEM
+    subtract it (one geometry source, entry 215). MEASURED: throat
+    impedance with the plug is bit-identical to without at 300/600/1000 Hz.
+    NOT claimed: the path-length / throat-cavity benefit that is the reason
+    bullets exist -- that needs the driver's cone geometry, which the app
+    does not have, and BEM. The stats line says so.
+    MESH: bulletMesh (closed solid of revolution, base disc + nose + tip,
+    outward by signed volume; volume = half-ellipsoid within 0.4%) and
+    spokeMesh (thin plate per spoke at azimuth pi/2 + 2 pi k/N, z from
+    0.12 L to 0.72 L, from 1 mm inside the bullet to min(2, 0.6 thick)
+    inside the wall shell, built from the profile's OWN section via
+    sectionPoint so it meets an ellipse / superellipse / rrect wall
+    wherever the section puts it). All watertight (validateMesh). Merged
+    into the STL / faceted STEP like the WN fins. BEM ZIP: the bullet
+    body rides the fin path (floating closed rigid solid, outward-
+    oriented); the spokes are NOT in the BEM mesh (they touch the wall --
+    Boolean union) -- README block says so; quarter symmetry is refused
+    the way it is for fins. The NURBS STEP is the horn surface only (stats
+    say so). Drawing: the bullet mirrored about the axis, hatched.
+    validateInputs: bullet O capped at throat minus room for the spokes
+    (synced + told); removed with a message when the throat cannot host
+    one. Pinned: net area == law, Z identical, meshes watertight, volume,
+    DOM path (dials, stats, drawing, STL click clean, sub-dial rule).
+
+238. (HORNLAB.IO REVIEW -- WHAT WE TOOK, 2026-09-28. Marwan: "look at
+    hornlab.io and see if anything from our studio can be improved and or
+    is wrong", then, with the bundle in hand: "learn everything we can from
+    horn-lab that can improve horn studio". Phigo, its author, had posted
+    it on our thread (#57). The review itself: their R-OSSE / OS-SE match
+    ours to 0.00e+0 from the papers; their isophase JMLC (an independent
+    front-tracking march) agrees with jmlcWall to 0.1% over five throat /
+    fc / T combinations (mid-length 30.600 vs 30.599 mm); nothing of
+    theirs was copied -- these are their IDEAS, re-implemented.)
+    (a) DESIGN PROVENANCE IN EVERY EXPORT (theirs: auto-saved versions on
+        export; ours carried nothing). designJSON() = the exact Save-design
+        payload, designTag() a one-liner. STEP: second FILE_DESCRIPTION
+        string (all four writers; apostrophes doubled per Part 21); STL:
+        the 80-byte header (never starting with "solid"); CSV: a leading #
+        line; AKABAK .aks: a |Design line; AKABAK and Boundary Lab ZIPs:
+        design.json (reloads with LOAD DESIGN). A printed horn can always be
+        traced to its dials.
+    (b) CSV NUMBER FORMAT (theirs: decSep / colSep). Selector above the CSV
+        button: 1.25 with comma columns, or 1,25 with semicolon columns
+        (DE/FR/NL Excel -- Hans's locale). CRLF line ends. Solver scripts
+        stay "." (entry 230). Export-only preference: no update().
+    (c) 1-D LOADING CORNER, Batik's criterion (the frequency where the
+        throat resistance falls to 20% of its asymptotic value), printed
+        where the Webster chain converges (top-octave ripple under 15% of
+        the asymptote) and "NOT DEFINED" + a chart caption where it does
+        not (RULE 6). Not adopted: their fc_practical = sqrt(fc_flare^2 +
+        fc_mouth^2) (no source) and their fc_tmm (the |Z| peak).
+    (d) LOW-END LIMIT readout for the fc families: design flare fc vs the
+        mouth kr=1 corner -- MOUTH-limited / FLARE-limited / balanced, and
+        the dial that moves it. Two numbers the app already had, compared.
+    (e) NATURAL ENTRY HALF-ANGLE for jmlc / jmlcell, closed form
+        sin th0 = rt*m*T/2 (entry 88's validated formula; NOTE: the jmlc
+        march itself seeds a FLAT front -- th0 = 0 -- and the angle EMERGES
+        from the area law; the readout is the closed form, not the seed).
+    (f) kr=1 RADIUS AT fc under the roundover dial (c/(2 pi fc)), the
+        radius at which a lip is acoustically large at cut-off -- a
+        reference mark, no geometry change (theirs: default rollback
+        radius lambda_c / 2 pi).
+    (g) CORRECTION FOUND ON THE WAY -- websterEnd. The 1-D chain
+        (throatImpedance / hornResponse / hornMaxSPL) was fed the CURLED-
+        BACK LIP: past the mouth plane a rolled wall's z decreases, the
+        axial spacing clamp gave 1e-6 mm elements carrying a large area
+        step, i.e. an abrupt reflector. MEASURED: JMLC at truncation 175
+        had +-0.55 top-octave ripple (0.035 at truncation 90); the R-OSSE
+        "non-convergence" the review had attributed to physics (asymptote
+        0.835, ripple +-0.76, station-count independent) was THIS. The
+        chain now ends at the MOUTH PLANE (station of maximum z, flare
+        stations included -- a roundover that ends at 90 deg is duct up to
+        the plane), radiation load applied there. After: JMLC 175 asymptote
+        1.000, ripple 0.035, 20% corner 399 Hz at fc 400 -- exactly fc.
+        What still does not converge is real: the plane-wave staircase on
+        a NEAR-VERTICAL wall before the plane (cd's 80-degree final flare,
+        OS-SE / R-OSSE steep terminations, Kugelwellen at 175) -- captioned
+        on the chart, corner withheld. Wide cones legitimately sit below 1
+        in-band (k * r_apex finite: a 45-degree cone reads 0.70 at 12 kHz,
+        station-independent), so the convergence test is relative ripple,
+        not an absolute window. The entry-215 Thuras bench still passes
+        (< 0.5%) because a roundover ending at 90 keeps its stations.
+    Pinned: DOM (jmlc corner 399 Hz, Low-end limit, natural angle; rosse
+    NOT DEFINED + caption; hypex lip hint; csvSel), STEP/LEM strings, app
+    regexes, websterEnd behaviour.
+
+239. (README TELLS THE TRUTH, 2026-09-28, found by the hornlab review.)
+    README.md said NumCalc is "compiled to WebAssembly for in-browser use".
+    The in-browser solver was REMOVED on 2026-07-14 (entry 86); index.html
+    contains no WebAssembly at all. Rewritten: Horn Studio prepares BEM
+    models (GMSH mesh, AKABAK/ABEC project, AKABAK LEM script, Boundary
+    Lab project) for external solvers; NumCalc named as the reference the
+    symmetry convention was written for. Also: engine comments pointed at
+    PROVENANCE.md, a file that never existed in the repo (README.md is the
+    provenance doc) -- fixed, pin updated; README gains the per-plane
+    OS-SE / R-OSSE note (entry 235), the 1-D estimate provenance (entry
+    238), and the September cross-check paragraph (R-OSSE / OS-SE to
+    machine precision from the papers; isophase JMLC 0.1% against an
+    independent implementation; no code exchanged). Version 1.1.
+    RECONSTRUCTED TOOLCHAIN (see entry 231's note): rebuild.py is back in
+    the repo, verified byte-identical against the shipped build 232 apart
+    from the stamp; horn_studio.html is a symlink to index.html for the
+    smoke test's fixed path.
+
+240. (THE AUGUST BUILDS THAT NEVER SHIPPED, AND WHAT THIS SESSION DID
+    ABOUT IT, 2026-09-28.) Found in the session record while restoring
+    step_eval.py: between 2026-08-20 and 08-24 a previous session built
+    233-237 -- source-tree recovery, throat ceiling 120 -> 450, per-family
+    throat ceilings, a bullet phase plug (ogive / ellipse / cone noses,
+    RETROFIT vs DESIGNED-IN modes, struts), a "findable" PHASE PLUG
+    heading -- and could NOT push: the sandbox git proxy refused the repo
+    ("not in this session's authorized repository set"). Those builds
+    reached Marwan only as zips + the rendered html; GitHub stayed at
+    build 232, and the repo never received rebuild.py, fuzz_harness.js,
+    bench_mouth.js, bench_plug.js, step_eval.py or entries 231-237.
+    THIS session started from GitHub's build 232 (the only source of
+    truth reachable) and re-implemented the same two forum asks
+    independently (entries 234 and 237 above), then folded in the August
+    ideas that were better than mine: the three nose shapes (tangent
+    ogive as the default -- a turned bullet leaves its base parallel to
+    the axis), the DESIGNED-IN / RETROFIT mode select (retrofit: walls as
+    designed, the loading chart shows what the bullet costs), the PHASE
+    PLUG heading, and the 450 mm ceiling (every family re-swept finite and
+    watertight at 300 / 450 mm). Recovered from the record verbatim:
+    step_eval.py (T6 runs again), fuzz_harness.js, bench_mouth.js;
+    bench_plug.js rewritten for the shipped API (the August draft benched
+    an API that never reached the repo; the recovered fuzz harness's
+    export sweep had guessed signatures and never actually ran -- fixed,
+    24 finite exports now). Also from the live screenshots: plugD joins
+    the per-family reset list (a 150 mm bullet carried into a 1" horn was
+    being capped to 36 mm with a warning), and the plug group is REMOVED
+    on rectangular throats (a bullet is axisymmetric; rule 6).
+    Entry numbering: the August 233-237 are superseded by the entries of
+    this session with the same numbers; the August prose survives only in
+    the session record.
+    LADDER, all green: bench_akabak, bench_mouth, bench_plug, fuzz (13
+    families, no throw, no spirals; 24 finite exports), smoke (ALL PASS),
+    artifact suite in real Chromium T1-T14 ALL PASS (T12 kodomo's ribbon
+    through the real UI: V from 83.0, monotone, no pedestal; T13 the plug:
+    heading + selects + STL grows by bullet and spokes + header tag; T14
+    the fold audit called out and cleared).
+    PUSH: not attempted from here without asking (public site).

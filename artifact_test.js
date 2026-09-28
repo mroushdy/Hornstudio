@@ -412,8 +412,8 @@ function profileQuality(pts, opts) {
                readme: files['README.txt'] || '', mshHead: (names.filter(n => n.endsWith('.msh'))[0] ? files[names.filter(n => n.endsWith('.msh'))[0]] : '').slice(0, 200) };
     });
     const r9 = result || { names: [], solving: '', obs: '', readme: '', mshHead: '' };
-    check('T9 AKABAK project zip (entry 224): the real button saves ONE zip with README + solving.txt + observation.txt + mesh; solving carries the verified ABEC grammar wired to OUR tags (Include 2 walls, Include 1 source, Driving DrvGroup 1001), observation aims the polars from the mouth plane, the mesh inside is GMSH 2.2',
-      clicked && !!result && r9.names.length === 4 && r9.names.some(n => n.endsWith('.msh')) &&
+    check('T9 AKABAK project zip (entry 224): the real button saves ONE zip with README + design.json + solving.txt + observation.txt + mesh; solving carries the verified ABEC grammar wired to OUR tags (Include 2 walls, Include 1 source, Driving DrvGroup 1001), observation aims the polars from the mouth plane, the mesh inside is GMSH 2.2',
+      clicked && !!result && r9.names.length === 5 && r9.names.indexOf('design.json') >= 0 && r9.names.some(n => n.endsWith('.msh')) &&   // entry 238: + design.json (provenance)
       /Control_Solver/.test(r9.solving) && /101 Mesh Include 2/.test(r9.solving) && /101 Mesh Include 1/.test(r9.solving) &&
       /RefElements="SourceDisc"/.test(r9.solving) && /DrvGroup=1001/.test(r9.solving) &&
       /DrvGroup=1001/.test(r9.obs) && /PolarRange=-90, 90, 37/.test(r9.obs) && /BasePlane=2001 2002 2004/.test(r9.obs) &&
@@ -522,6 +522,76 @@ function profileQuality(pts, opts) {
     check('T11 when the 1-D charts are disabled (per-azimuth HVDiff loft) the AKABAK SCRIPT button is REMOVED, not left inert (RULE 6)',
       !gone.hv || gone.hidden, JSON.stringify(gone));
     check('T11 zero page errors', page.__errs.length === 0, page.__errs.join(' | '));
+    await page.close();
+  }
+
+  // ---- T12 (entry 235): kodomo's ribbon case through the REAL UI -- per-plane
+  // OS-SE, rect throat 48.6 x 166, 70 H x 45 V. The V wall must flare from 83 mm
+  // immediately with no parallel run (the pedestal of build 232).
+  {
+    const page = await boot(browser);
+    await setFamily(page, 'os');
+    await page.evaluate(() => { const t = document.getElementById('throatSel'); t.value = 'rect'; t.dispatchEvent(new Event('change', { bubbles: true })); });
+    await new Promise(r => setTimeout(r, 800));
+    await setDials(page, { ribW: 48.6, ribH: 166, covH: 70, covV: 45, f0: 1600 });
+    const clicked = await clickExport(page, /PROFILE CSV/);
+    const blobs = await takeBlobs(page);
+    const lines = blobs.length ? blobs[0].text.trim().split(/\r?\n/) : [];
+    const rows = lines.slice(1).map(l => l.split(',').map(Number)).filter(r => r.length === 4 && r.every(isFinite));
+    let vStart = NaN, hStart = NaN, longestFlat = 0, run = 0, vMono = true;
+    if (rows.length > 40) {
+      hStart = rows[0][1]; vStart = rows[0][3];
+      const depth = rows[rows.length - 1][2];
+      for (let i = 1; i < rows.length; i++) {
+        const dz = rows[i][2] - rows[i - 1][2], dr = rows[i][3] - rows[i - 1][3];
+        if (dr < -1e-6) vMono = false;
+        if (rows[i][2] > 0.7 * depth) break;
+        if (dz > 1e-9 && dr / dz < 0.05) { run++; longestFlat = Math.max(longestFlat, run); } else run = 0;
+      }
+    }
+    const st = await page.evaluate(() => (document.getElementById('stats') || {}).innerHTML || '');   // innerHTML: the stat labels are CSS-uppercased in innerText
+    check('T12 kodomo ribbon on OS-SE (entry 235): 4-column CSV, H starts at 24.3 and V at 83.0, V monotone, no near-parallel run longer than 25% of the body (build 232: the entire body, then a jump), stats name the plane that set L',
+      clicked && rows.length > 40 && Math.abs(hStart - 24.3) < 0.05 && Math.abs(vStart - 83) < 0.05 && vMono && longestFlat < 0.25 * rows.length && /Per-plane OS-SE/.test(st) && /set by the V plane/.test(st),   // the OS law itself launches gently from a large aperture at a0 = 0 (~14% of the body under slope 0.05); the pedestal was the WHOLE body, then a jump
+      'rows ' + rows.length + ' H0 ' + hStart + ' V0 ' + vStart + ' flatRun ' + longestFlat);
+    check('T12 zero page errors', page.__errs.length === 0, page.__errs.join(' | '));
+    await page.close();
+  }
+
+  // ---- T13 (entry 237): the phase plug through the REAL UI -- heading visible,
+  // the STL grows by the bullet + spokes, the header carries the design tag.
+  {
+    const page = await boot(browser);
+    await setFamily(page, 'hypex');
+    await setDials(page, { fc: 150, throatD: 200 });
+    const before = await (async () => { await clickExport(page, /STL SOLID/); let b = []; for (let w = 0; w < 7 && !b.length; w++) { await new Promise(r => setTimeout(r, 2000)); b = await takeBlobs(page); } return b.length ? b[0].size : 0; })();
+    await setDials(page, { plugD: 100 });
+    const vis = await page.evaluate(() => {
+      const h = document.getElementById('plugsect'), s1 = document.getElementById('plugShapeSel'), s2 = document.getElementById('plugModeSel'), l = document.getElementById('wrap_plugL');
+      return { heading: !!h && getComputedStyle(h).display !== 'none', shape: !!s1 && getComputedStyle(s1).display !== 'none', mode: !!s2 && getComputedStyle(s2).display !== 'none', sub: !!l && getComputedStyle(l).display !== 'none' };
+    });
+    const after = await (async () => { await clickExport(page, /STL SOLID/); let b = []; for (let w = 0; w < 7 && !b.length; w++) { await new Promise(r => setTimeout(r, 2000)); b = await takeBlobs(page); } return b.length ? b[0] : null; })();
+    const st = await page.evaluate(() => (document.getElementById('stats') || {}).innerHTML || '');   // innerHTML: the stat labels are CSS-uppercased in innerText
+    const hdr = after ? after.text.slice(0, 80) : '';
+    check('T13 phase plug (entry 237): PHASE PLUG heading + shape/mode selects + sub-dials appear with the bullet, the STL grows by the bullet and spokes, its 80-byte header carries the design tag, stats describe it',
+      before > 100000 && after && after.size > before + 50000 && vis.heading && vis.shape && vis.mode && vis.sub && /HornStudio b\d+/.test(hdr) && /family=hypex/.test(hdr) && /throatD=200/.test(hdr) && /Phase plug \(bullet on spokes\)/.test(st),   // the 80-byte header is a summary (family, fc, throat...); the full design rides the STEP/ZIP exports
+      'before ' + before + ' after ' + (after && after.size) + ' vis ' + JSON.stringify(vis) + ' hdr ' + JSON.stringify(hdr.replace(/\0/g, '')));
+    check('T13 zero page errors', page.__errs.length === 0, page.__errs.join(' | '));
+    await page.close();
+  }
+
+  // ---- T14 (entry 236): the fold audit through the REAL UI -- a Kugelwellen at
+  // truncation 200 with a 140 mm / 135-degree roll folds; the errbox and stats say so.
+  {
+    const page = await boot(browser);
+    await setFamily(page, 'swh');
+    await setDials(page, { trunc: 200, flareR: 140, flareWrap: 135 });
+    const r = await page.evaluate(() => ({ eb: (document.getElementById('errbox') || {}).innerText || '', st: (document.getElementById('stats') || {}).innerText || '' }));
+    await setDials(page, { flareR: 30, flareWrap: 0, trunc: 175 });
+    const r2 = await page.evaluate(() => ({ eb: (document.getElementById('errbox') || {}).innerText || '', st: (document.getElementById('stats') || {}).innerText || '' }));
+    check('T14 fold audit (entry 236): the folded roll is called out in the errbox AND the stats, and the call-out clears when the dials are backed off',
+      /GEOMETRY FOLDS THROUGH ITSELF/.test(r.eb) && /GEOMETRY FOLDS THROUGH ITSELF/.test(r.st) && !/FOLDS THROUGH/.test(r2.eb) && !/FOLDS THROUGH/.test(r2.st),
+      JSON.stringify({ eb: r.eb.slice(0, 80), cleared: !/FOLDS/.test(r2.eb) }));
+    check('T14 zero page errors', page.__errs.length === 0, page.__errs.join(' | '));
     await page.close();
   }
 

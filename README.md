@@ -1,6 +1,6 @@
 # Horn Studio — Provenance & Attribution
 
-*Maintained by (Silence Please, New York). Version 1.0, 16 July 2026.
+*Maintained by (Silence Please, New York). Version 1.1, 28 September 2026.
 This document is part of the repository and is updated whenever a method,
 citation, or credit changes; corrections are incorporated with acknowledgment.*
 
@@ -47,7 +47,10 @@ preserved and documents this history.
 - **Oblate spheroidal (OS / OS-SE)** — E. Geddes, *Acoustic Waveguide Theory*
   (JAES, 1989).
 - **R-OSSE** — implemented from the published R-OSSE profile definition by
-  Marcel Batík (at-horns.eu).
+  Marcel Batík (at-horns.eu). Per-plane (asymmetric H/V) OS-SE and R-OSSE run
+  the same published formulae once per principal plane with that plane's own
+  throat aperture and coverage — the form ATH users know; the azimuthal
+  superellipse loft between the planes is Horn Studio's own.
 - **Arai-inspired biradial** — reconstructed from published drawings and
   photographs of the Arai A-290 series; calibration documented in the
   development log.
@@ -112,12 +115,18 @@ nothing here makes any claim about them.
 
 ## Numerical engine
 
-- **NumCalc** — the BEM solver is NumCalc from the open-source **Mesh2HRTF**
-  project (Ziegelwanger, Majdak, Kreuzer et al.), compiled to WebAssembly for
-  in-browser use, and used unmodified in native form for export targets. Used
-  under its open-source license with attribution.
-- Mie-series analytical validation, mesh-quality methodology, and the export
-  pipelines are original to Horn Studio.
+- **BEM** — Horn Studio does not run a BEM solver (an in-browser NumCalc build
+  was removed in July 2026, build 86). It *prepares* BEM models for external
+  solvers: a GMSH 2.2 mesh with numbered physical groups, an AKABAK/ABEC
+  script project, an AKABAK LEM script, and a Boundary Lab project. NumCalc
+  (from the open-source **Mesh2HRTF** project — Ziegelwanger, Majdak, Kreuzer
+  et al.) remains the reference solver the quarter-symmetry mesh convention
+  was written for.
+- The 1-D estimates (Webster transmission-matrix chain terminated at the mouth
+  plane by the baffled-piston load, the Keele beamwidth trend, the Thuras /
+  Makarski air-distortion ceiling), the mesh-quality methodology, and the export
+  pipelines are original to Horn Studio. The 20 % throat-resistance loading
+  corner follows Batík's published criterion.
 
 ## Terminology
 
@@ -131,6 +140,11 @@ above. Per-term links to the corresponding articles will be added using
 Dr. Ahlswede's preferred references.
 
 ---
+
+*Independent cross-checks (September 2026): the R-OSSE and OS-SE profiles were
+re-derived from the papers and match to machine precision; the isophase JMLC
+march agrees to 0.1 % with an independent front-tracking implementation
+(hornlab.io, Phigo). No code was exchanged.*
 
 *Corrections or preferred citations from any researcher named here are
 welcome and will be incorporated. The radial-flare mouth treatment in the WN
