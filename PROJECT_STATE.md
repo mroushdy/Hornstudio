@@ -4745,3 +4745,20 @@ shipped compacts, scale f0/f0V by 25/20 (e.g. 625/2500 instead of 500/2000). Asp
     heading + selects + STL grows by bullet and spokes + header tag; T14
     the fold audit called out and cleared).
     PUSH: not attempted from here without asking (public site).
+
+241. (ZEN_TM'S SHAPE IDENTIFIED, 2026-09-28, Marwan with the full-size
+    screenshot: "I think he was referring to this crazy shape".) It is the
+    William Neile family at throat 120 (the old dial maximum), fc 300, H
+    lock 70, V lock 60 -- mu = 2r/lambda = 0.105, 2.4x the verified
+    coefficient interval. MEASURED: the mu-linear mouth laws give a
+    1026 x 363 mm mouth only 221 mm deep (1-inch reference: 602 x 269,
+    367 deep), a pancake, and the surface-frame wrap of that pancake is
+    the sheet in his picture. The lip itself is sane (max excursion 87 mm
+    for a 40 mm roll at every throat tested); the H/V fold audit (entry
+    236) is silent because nothing crosses in the principal planes -- the
+    shape is "valid" geometry from invalid coefficients. So the fix is the
+    one Marwan asked for in August ("different horn types could have a
+    maximum throat size"): WN throat capped at mu 0.07 in validateInputs (0.06 clipped the 1.4-inch reference at 600 Hz, a real use -- the smoke pin caught it)
+    (throat clamped and told, with the fc at which a bigger throat becomes
+    available); the engine's mu 0.20 floor stays as the NaN guard. At fc
+    300 that is O 80 mm; at 150 Hz, 160 mm; at 100 Hz, 240 mm.

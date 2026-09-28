@@ -2172,7 +2172,7 @@ check('LOG FC SLIDER (entry 208, forum: 4-inch waveguide wants fc past 2 kHz): t
     allOk && /key: "throatD", label: "Throat \\u00d8", unit: "mm", min: 4, max: 450/.test(htmlB) &&   // 450: the August build Marwan tested; every family swept finite + watertight at 300/450 mm
     wnBig.wn.prof.muClamped === true && wnNaN === 0 &&
     E.computeFamily(Object.assign({}, big, { family: 'wn', fc: 300, rt: 17.78, throatD: 35.56 })).wn.prof.muClamped === false &&
-    /muW > 0\.2\) \{ var dW = Math\.floor\(0\.2 \* lamW \* 100\) \/ 100; syncKey\("throatD", dW\)/.test(htmlB) &&
+    /muW > 0\.07\) \{ var dW = Math\.floor\(0\.07 \* lamW \* 100\) \/ 100; syncKey\("throatD", dW\)/.test(htmlB) &&   // entry 241: WN capped at mu 0.06 (zen_tm's pancake), engine floor 0.20 stays
     /S\.family === "hypex" \|\| S\.family === "tractrix"/.test(htmlB) && /rMh <= rtA \+ 1\) \{ msgs\.push\("REJECTED/.test(htmlB) &&
     /S\.family === "jmlc" \|\| S\.family === "jmlcell" \|\| S\.family === "swh"/.test(htmlB) && /sJ >= 0\.95\) \{ msgs\.push\("REJECTED/.test(htmlB));
 })();
