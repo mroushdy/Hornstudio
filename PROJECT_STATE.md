@@ -4564,8 +4564,6 @@ shipped compacts, scale f0/f0V by 25/20 (e.g. 625/2500 instead of 500/2000). Asp
     curve to 1e-9. Rect-throat solid watertight. DOM-driven check through
     the real handlers (family, throat selector, ribW/ribH/covH/covV/f0,
     rosAV) reads the new stats back with a clean errbox.
-    Picture: kodomo_before_after.png (repo) -- left the pedestal, right
-    the per-plane flare.
 
 236. (FOLD AUDIT, 2026-09-28, zen_tm on the forum #56, with a screenshot of a
     mouth roll curled back through the horn body: "I'm thinking this
