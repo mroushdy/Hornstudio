@@ -595,6 +595,33 @@ function profileQuality(pts, opts) {
     await page.close();
   }
 
+  // ---- T15 (entry 242): the forum report -- "STEP (Nurbs Surface) ... the phase plug
+  // isn't part of the step file". One click must now deliver TWO files: the horn
+  // NURBS surface and a faceted phase_plug.step whose vertices sit inside the horn's
+  // throat (same coordinate system: bullet base at z = 0, radius < throat radius).
+  {
+    const page = await boot(browser);
+    await setFamily(page, 'hypex');
+    await setDials(page, { fc: 150, throatD: 200, plugD: 100 });
+    const clicked = await clickExport(page, /NURBS/);
+    let blobs = [];
+    for (let w = 0; w < 8 && blobs.length < 2; w++) { await new Promise(r => setTimeout(r, 2000)); blobs = blobs.concat(await takeBlobs(page)); }
+    const nurbs = blobs.find(b => /B_SPLINE_SURFACE_WITH_KNOTS/.test(b.text));
+    const plug = blobs.find(b => /Horn Studio faceted export/.test(b.text.slice(0, 200)));
+    let zMin = 1e9, zMax = -1e9, rMax = 0, nPts = 0;
+    if (plug) {
+      const re = /CARTESIAN_POINT\('',\(([-\d.]+),([-\d.]+),([-\d.]+)\)\)/g; let m;
+      while ((m = re.exec(plug.text)) && nPts < 5000) { const z = +m[1], x = +m[2], y = +m[3]; zMin = Math.min(zMin, z); zMax = Math.max(zMax, z); rMax = Math.max(rMax, Math.hypot(x, y)); nPts++; }
+    }
+    const note = await page.evaluate(() => (document.getElementById('v3dnote') || {}).textContent || '');
+    check('T15 NURBS export with a phase plug (entry 242, forum): ONE click saves the horn surface AND phase_plug.step -- a faceted closed solid with the bullet base at z = 0, tip at z = L (200), spokes reaching the opened wall (r > throat radius 100), design tag in both headers, and the note says so',
+      clicked && !!nurbs && !!plug && Math.abs(zMin) < 1e-3 && zMax > 199 && zMax < 201 && rMax > 100 && rMax < 200 &&
+      /HornStudio b\d+/.test(nurbs.text.slice(0, 400)) && /HornStudio b\d+/.test(plug.text.slice(0, 400)) && /PLUS phase_plug\.step/.test(note),
+      'blobs ' + blobs.length + ' plug z ' + zMin + '..' + zMax + ' rMax ' + rMax + ' pts ' + nPts + ' note ' + JSON.stringify(note.slice(0, 120)) + ' plugNamed ' + (plug ? /phase_plug\.step/.test(plug.text) : 'n/a') + ' len ' + (plug ? plug.text.length : 0));
+    check('T15 zero page errors', page.__errs.length === 0, page.__errs.join(' | '));
+    await page.close();
+  }
+
   await browser.close();
   console.log(failures === 0 ? 'ARTIFACT SUITE: ALL PASS' : 'ARTIFACT SUITE: ' + failures + ' FAILURES');
   process.exit(failures === 0 ? 0 : 1);

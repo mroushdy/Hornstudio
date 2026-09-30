@@ -3287,8 +3287,13 @@ function plugMeshes(prof, segs, wallThick) {
   if (!plug || !(plug.D > 0)) return [];
   var out = [bulletMesh(plug, segs)];
   var N = Math.max(0, Math.round(plug.spokes || 0)), t = Math.max(0.8, plug.spokeT || 3);
+  // entry 243 (forum: "I plan on printing the phase plug only to fit into a
+  // previously printed horn"): RETROFIT spokes end 0.2 mm SHORT of the wall
+  // (a fit clearance, glue line) instead of running 2 mm into a shell that is
+  // not being printed with them; DESIGNED-IN keeps the overlap for the union.
+  var ovOut = plug.compensated === false ? -0.2 : Math.min(2, 0.6 * (wallThick || 3));
   for (var k = 0; k < N; k++) {
-    var m = spokeMesh(prof, plug, Math.PI / 2 + 2 * Math.PI * k / N, t, 1.0, Math.min(2, 0.6 * (wallThick || 3)));
+    var m = spokeMesh(prof, plug, Math.PI / 2 + 2 * Math.PI * k / N, t, 1.0, ovOut);
     if (m) out.push(m);
   }
   return out;

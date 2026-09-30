@@ -2344,6 +2344,12 @@ check('LOG FC SLIDER (entry 208, forum: 4-inch waveguide wants fc past 2 kHz): t
     jOk && rOk && hOk && cOk && provOk && csvOk && wEnd);
 })();
 
+// ---- entry 242: the NURBS export carries the phase plug as a companion file ----
+check('NURBS STEP + PHASE PLUG (entry 242, forum on build 241: "the phase plug isn\'t part of the step file?"): a plugged design saves phase_plug.step (bullet + spokes, faceted solid via the proven stepFromMesh path, same coordinates) with the same click, the note says so, the stats no longer claim "horn surface only"',
+  /saveBlob\(fname\("phase_plug"\) \+ "\.step", new Blob\(\[stepFromMesh\(mP\.pos, mP\.idx, "phase_plug"/.test(htmlB) &&
+  /PLUS phase_plug\.step \(bullet \+ /.test(htmlB) && /var profP = profOf\(lastAct, 220\), pmN = plugMeshes\(profP, 64, S\.thick\)/.test(htmlB) &&
+  /the NURBS STEP saves a second phase_plug\.step beside the horn surface/.test(htmlB) && !/the NURBS STEP is the horn surface only/.test(htmlB));
+
 check('errbox clean', !errEl._t || !/OVERSHOOT/.test(errEl._t));
 console.log(fail ? ('\n' + fail + ' FAILURES') : '\nALL PASS');
 process.exit(fail ? 1 : 0);

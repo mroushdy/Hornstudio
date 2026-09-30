@@ -62,6 +62,13 @@ var all = E.mergeMeshes([E.buildSolidMesh(des, 5, 64, null, "round")].concat(ms)
 var fin = true; for (var f2 = 0; f2 < all.pos.length; f2++) if (!isFinite(all.pos[f2])) fin = false;
 ck("merged horn + plug mesh is finite", fin);
 
+// 3b. RETROFIT spokes stop short of the wall (a plug printed on its own must fit an existing horn)
+var msR = E.plugMeshes(ret, 64, 5), spR = msR[1], rMaxR = 0, zAtMax = 0;
+for (var p2 = 0; p2 < spR.pos.length; p2 += 3) { var rr2 = Math.hypot(spR.pos[p2 + 1], spR.pos[p2 + 2]); if (rr2 > rMaxR) { rMaxR = rr2; zAtMax = spR.pos[p2]; } }
+function wallAt(P, z) { for (var i = 1; i < P.H.length; i++) if (P.H[i].z >= z) { var f = (z - P.H[i - 1].z) / ((P.H[i].z - P.H[i - 1].z) || 1e-9); return P.H[i - 1].r + f * (P.H[i].r - P.H[i - 1].r); } return P.H[P.H.length - 1].r; }
+ck("retrofit spoke outer edge sits 0.2 mm inside the (unopened) wall", Math.abs(wallAt(ret, zAtMax) - rMaxR - 0.2) < 0.05, (wallAt(ret, zAtMax) - rMaxR).toFixed(3));
+ck("designed-in spoke outer edge runs INTO the wall shell", rMax > des.H[0].r);
+
 // 4. NO PLUG, NO EFFECT
 var none = E.plugApply(prof, { D: 0, L: 0 }, true);
 ck("D = 0 returns the profile untouched", none === prof);

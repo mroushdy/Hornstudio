@@ -3403,8 +3403,13 @@ function plugMeshes(prof, segs, wallThick) {
   if (!plug || !(plug.D > 0)) return [];
   var out = [bulletMesh(plug, segs)];
   var N = Math.max(0, Math.round(plug.spokes || 0)), t = Math.max(0.8, plug.spokeT || 3);
+  // entry 243 (forum: "I plan on printing the phase plug only to fit into a
+  // previously printed horn"): RETROFIT spokes end 0.2 mm SHORT of the wall
+  // (a fit clearance, glue line) instead of running 2 mm into a shell that is
+  // not being printed with them; DESIGNED-IN keeps the overlap for the union.
+  var ovOut = plug.compensated === false ? -0.2 : Math.min(2, 0.6 * (wallThick || 3));
   for (var k = 0; k < N; k++) {
-    var m = spokeMesh(prof, plug, Math.PI / 2 + 2 * Math.PI * k / N, t, 1.0, Math.min(2, 0.6 * (wallThick || 3)));
+    var m = spokeMesh(prof, plug, Math.PI / 2 + 2 * Math.PI * k / N, t, 1.0, ovOut);
     if (m) out.push(m);
   }
   return out;
@@ -7073,7 +7078,7 @@ function mouthCorner(prof, areaOverride) {
       '<main>' +
       '<div style="padding:12px 16px;border-bottom:1px solid var(--line)"><div class="eyebrow" style="margin-bottom:6px">3-D PREVIEW \u2014 DRAG ROTATE \u00b7 WHEEL ZOOM <button class="btn" id="showConstr" style="display:none;width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">SHOW CONSTRUCTION</button><button class="btn" id="dirOvBtn" style="width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">DIRECTIVITY: OFF</button><button class="btn" id="bemPrevBtn" style="width:auto;padding:3px 8px;margin:0 0 0 12px;font-size:9px">BEM MESH: OFF</button></div>' +
       '<div id="view3d" style="width:100%;height:380px;background:#FFFFFF;touch-action:none;cursor:grab"></div>' +
-      '<span id="buildstamp" style="font-family:var(--mono);font-size:9px;color:var(--faint);letter-spacing:0.08em">build 241 · 2026-09-28</span><div id="v3dnote" style="font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:6px;letter-spacing:.04em"></div></div>' +
+      '<span id="buildstamp" style="font-family:var(--mono);font-size:9px;color:var(--faint);letter-spacing:0.08em">build 243 · 2026-09-30</span><div id="v3dnote" style="font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:6px;letter-spacing:.04em"></div></div>' +
       '<div id="drawing" style="padding:10px 12px 0"></div>' +
       '<div class="legend" id="legend"></div><div class="stats" id="stats"></div>' +
       '<div style="padding:14px 16px 0 16px"><div class="eyebrow">REPORTS \u2014 1-D / GEOMETRIC ESTIMATES (NOT A BEM SUBSTITUTE)</div></div>' +
@@ -7406,8 +7411,29 @@ function mouthCorner(prof, areaOverride) {
         var sfN = nurbsLoft(ringsN, MN, segsN);
         saveBlob(fname("nurbs") + ".step", new Blob([stepFromNurbs(sfN, "horn_inner_surface", designTag() + " | " + designJSON())], { type: "text/plain" }));
       }
+      /* entry 242 (forum, on build 241: "I export the project as STEP (Nurbs Surface)
+         and open it in Fusion 360. For some reason the phase plug isn't part of the
+         step file?"). It was not -- the NURBS export is the horn's inner surface
+         alone, and the stats said so, in a line nobody reads when the plug is what
+         they came for. Now a plugged design saves a SECOND file with the same
+         click: the bullet + spokes as a faceted closed solid (the proven
+         stepFromMesh path, the same solids the STL carries), in the SAME
+         coordinate system, so the two land aligned in Fusion (insert both, the
+         plug sits in the throat). The horn stays one clean NURBS surface -- a
+         B-spline bullet with a pole at the tip is exactly the kind of topology
+         Rhino rejects (entry 205), so the plug goes out as facets, which every CAD
+         imports as a body. */
+      var plugNote = "";
+      if (lastProf && lastProf.plug) {
+        var profP = profOf(lastAct, 220), pmN = plugMeshes(profP, 64, S.thick);
+        if (pmN.length) {
+          var mP = mergeMeshes(pmN); validateMesh(mP, true);
+          saveBlob(fname("phase_plug") + ".step", new Blob([stepFromMesh(mP.pos, mP.idx, "phase_plug", designTag() + " | " + designJSON())], { type: "text/plain" }));
+          plugNote = " \u00b7 PLUS phase_plug.step (bullet + " + (pmN.length - 1) + " spokes, faceted solid, same coordinates \u2014 insert both)";
+        }
+      }
       var ntN = exNote();
-      if (ntN) ntN.textContent = "NURBS STEP saved: one bicubic B-spline surface (" + MN + "\u00d7" + (segsN + 1) + " interpolated), inner surface only \u2014 thicken in CAD; the faceted STEP remains for direct solids";
+      if (ntN) ntN.textContent = "NURBS STEP saved: one bicubic B-spline surface (" + MN + "\u00d7" + (segsN + 1) + " interpolated), inner surface only \u2014 thicken in CAD; the faceted STEP remains for direct solids" + plugNote;
     });
     buildCurrentBEM = function () {   // entry 134: shared by the export and the 3-D mesh preview (entry 135: assigned to the SHARED-scope var so update3D can reach it -- it was nested inside build() and the preview silently never ran)
       var prof9 = profOf(lastAct, 300);
@@ -8035,7 +8061,7 @@ function mouthCorner(prof, areaOverride) {
       if (S.flareWrap <= 0.5 && _exitDeg > 92)
         st += statHTML("Roundover INACTIVE at wrap 0", "this wall already rolls itself to " + _exitDeg.toFixed(0) + "\u00b0 \u2014 WRAP now adds roll PAST the natural end: any wrap > 0 activates the roundover (R sets the lip radius)");
     }
-    if (actProf && actProf.plug) st += statHTML("Phase plug (bullet on spokes)", "\u00d8 " + fmt(actProf.plug.D, 1) + " \u00d7 L " + fmt(actProf.plug.L, 0) + " mm " + ({ bullet: "tangent-ogive", ellipse: "half-ellipsoid", cone: "conical" }[actProf.plug.shape] || "") + " nose, base in the throat plane \u00b7 " + actProf.plug.spokes + " spokes \u00d7 " + actProf.plug.spokeT + " mm, printed with the horn \u00b7 " + (actProf.plug.compensated ? "DESIGNED-IN: walls opened up to +" + fmt(actProf.plug.maxDr, 1) + " mm (\u00d7" + actProf.plug.maxScale.toFixed(3) + ") so NET area follows the law" : "RETROFIT: walls as designed, the bullet takes " + fmt(100 * actProf.occl[0] / (actProf.occl[0] + sectionArea(actProf.seNArr ? "sellipse:" + actProf.seNArr[0] : actProf.shape, actProf.H[0].r, actProf.V[0].r, actProf.rhoArr ? actProf.rhoArr[0] : actProf.rho) - actProf.occl[0]), 0) + " % of the throat area") + " \u2014 loading charts read the net area \u00b7 STL/faceted STEP carry bullet + spokes; BEM ZIP carries the bullet (rigid) but NOT the spokes; the NURBS STEP is the horn surface only \u00b7 path-length / directivity effects are NOT quantified (needs the cone geometry + BEM)");   /* entry 237 */
+    if (actProf && actProf.plug) st += statHTML("Phase plug (bullet on spokes)", "\u00d8 " + fmt(actProf.plug.D, 1) + " \u00d7 L " + fmt(actProf.plug.L, 0) + " mm " + ({ bullet: "tangent-ogive", ellipse: "half-ellipsoid", cone: "conical" }[actProf.plug.shape] || "") + " nose, base in the throat plane \u00b7 " + actProf.plug.spokes + " spokes \u00d7 " + actProf.plug.spokeT + " mm, printed with the horn \u00b7 " + (actProf.plug.compensated ? "DESIGNED-IN: walls opened up to +" + fmt(actProf.plug.maxDr, 1) + " mm (\u00d7" + actProf.plug.maxScale.toFixed(3) + ") so NET area follows the law" : "RETROFIT: walls as designed, spokes end 0.2 mm short of the wall (fit clearance for a plug printed on its own), the bullet takes " + fmt(100 * actProf.occl[0] / (actProf.occl[0] + sectionArea(actProf.seNArr ? "sellipse:" + actProf.seNArr[0] : actProf.shape, actProf.H[0].r, actProf.V[0].r, actProf.rhoArr ? actProf.rhoArr[0] : actProf.rho) - actProf.occl[0]), 0) + " % of the throat area") + " \u2014 loading charts read the net area \u00b7 STL/faceted STEP carry bullet + spokes; BEM ZIP carries the bullet (rigid) but NOT the spokes; the NURBS STEP saves a second phase_plug.step beside the horn surface (same coordinates) \u00b7 path-length / directivity effects are NOT quantified (needs the cone geometry + BEM)");   /* entry 237 */
     if (lastAct.fold) st += statHTML("\u26a0 GEOMETRY FOLDS THROUGH ITSELF", lastAct.fold.plane + " plane at z \u2248 " + fmt(lastAct.fold.z, 0) + ", r \u2248 " + fmt(lastAct.fold.r, 0) + " mm \u2014 " + lastAct.fold.hint + " (entry 236)");
     if (lastAct.entryDominatedLen > 1)
       st += statHTML("Entry-dominated region", fmt(lastAct.entryDominatedLen) + " mm (seed cone > law; wavefront held until the law catches up \u2014 by design)");

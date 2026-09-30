@@ -4762,3 +4762,32 @@ shipped compacts, scale f0/f0V by 25/20 (e.g. 625/2500 instead of 500/2000). Asp
     (throat clamped and told, with the fc at which a bigger throat becomes
     available); the engine's mu 0.20 floor stays as the NaN guard. At fc
     300 that is O 80 mm; at 150 Hz, 160 mm; at 100 Hz, 240 mm.
+
+242. (PHASE PLUG IN THE NURBS EXPORT, 2026-09-30, forum on build 241: "I'm
+    playing around with the phase plug and must be doing something wrong. I
+    export the project as STEP (Nurbs Surface) and open it in Fusion 360.
+    For some reason the phase plug isn't part of the step file?") He was
+    doing nothing wrong: the NURBS export was the horn's inner surface
+    alone, and the stats said so in a clause nobody reads when the plug is
+    what they came for. A plugged design now saves a SECOND file with the
+    same click: phase_plug.step = bullet + spokes as a faceted closed
+    solid (the proven stepFromMesh path, the same solids the STL carries),
+    in the same coordinate system, so the two land aligned in Fusion --
+    insert both, the plug sits in the throat. The horn stays one clean
+    NURBS surface: a B-spline bullet with a pole at the tip is exactly the
+    topology Rhino rejected in entry 205, so the plug goes out as facets,
+    which every CAD imports as a body. Export note names the second file;
+    stats line updated. LIVE T15: the real NURBS button with plugD 100 on
+    a 200 mm hypex delivers two blobs -- the B-spline surface and a
+    FACETED_BREP whose 2394 points run z = 0..200 (base at the throat
+    plane, tip at L) with the spokes reaching the opened wall (r 140),
+    design tag in both headers. Smoke pin added. Ladder green.
+
+243. (RETROFIT FIT CLEARANCE, 2026-09-30, the same forum user: "I plan on
+    printing the phase plug only to fit into a previously printed horn".)
+    That is RETROFIT mode -- walls untouched, phase_plug.step / STL carry
+    the plug alone -- but the spokes ran 2 mm INTO a wall shell that is not
+    being printed with them. In retrofit mode they now end 0.2 mm short of
+    the wall (fit clearance, glue line); designed-in keeps the overlap for
+    the union. Stats line says so. bench_plug pins both (spoke outer edge
+    vs the unopened wall: 0.2 mm; designed-in edge inside the shell).
